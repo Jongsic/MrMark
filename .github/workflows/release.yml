@@ -30,5 +30,29 @@ jobs:
           files: build/MrMark-*.dmg
           generate_release_notes: true
           body: |
-            > **Note:** this build is not notarized. On first launch,
+            > **Note:** the macOS build is not notarized. On first launch,
             > right-click the app and choose **Open**.
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same script contributors run locally; tests gate the release build.
+      - name: Build & test
+        working-directory: windows
+        shell: cmd
+        run: build.cmd test
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          Compress-Archive -Path windows\bin\MrMark.exe `
+            -DestinationPath "build\MrMark-$env:GITHUB_REF_NAME-windows-x64.zip"
+
+      # Attaches to the same release the macos job creates.
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: build/MrMark-*-windows-x64.zip

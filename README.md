@@ -4,10 +4,12 @@
 [![Release](https://img.shields.io/github/v/release/Jongsic/MrMark)](https://github.com/Jongsic/MrMark/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
+![Windows 10+](https://img.shields.io/badge/Windows-10%2B-blue)
 
-An **ultra-fast, minimal Markdown viewer & editor** for macOS.
-Native Swift + AppKit + TextKit 2 — not Electron, not a webview.
-One file = one window. No workspace, no tabs, no plugins, no cloud, no telemetry.
+An **ultra-fast, minimal Markdown viewer & editor**.
+Native on each platform — Swift + AppKit on macOS, C++ + Win32 on Windows.
+Not Electron, not a webview. One file = one window.
+No workspace, no tabs, no plugins, no cloud, no telemetry.
 
 ![MrMark](preview.gif)
 
@@ -16,59 +18,38 @@ Hit ✏️ to edit; hit 👁 to go back to reading. That's the whole app.
 
 ## Features
 
+Both apps implement the same spec.
+
 **Viewer (the fast path)**
 - GitHub-flavored Markdown: headings, bold/italic/strikethrough, lists,
   blockquotes, fenced code blocks, inline code, links, images, tables
   (rendered as a borderless aligned grid)
 - Task-list checkboxes are clickable — toggling writes `- [ ]` ↔ `- [x]`
-  back to the file (undoable)
+  back to the document (undoable)
 - Local images render inline; **remote images are never fetched**
-- ⌘F find bar, text zoom (⌘+/⌘−/⌘0, pinch, ⌘+scroll), dark mode
+- Find bar (⌘F / Ctrl+F), text zoom, dark mode
 
 **Editor**
 - Hybrid, Typora-style: the paragraph you're editing shows its Markdown
-  source; everywhere else the syntax markers (`#`, `**`, backticks, link
-  URLs) melt away and you read styled text. What you save is exactly the
-  Markdown you wrote
+  source; everywhere else the syntax markers melt away. What you save is
+  exactly the Markdown you wrote
 - Formatting toolbar: bold, italic, H1–H3, bullet/numbered/task lists, link,
   image, code block — plus undo/redo and save
-- Incremental restyling: only the edited block is re-highlighted, so typing
-  stays smooth in 10k-line files
+- Incremental restyling: only the edited block is re-highlighted
 
-**Files, handled like a native Mac app**
-- Manual save, exactly like classic Mac documents: ⌘S / toolbar button,
-  dirty indicator, a Save/Don't Save prompt when closing unsaved changes
-- Open Recent, window restoration; new documents open straight into the editor
+**Files, handled natively**
+- Manual save (⌘S / Ctrl+S), dirty indicator, a Save / Don't Save prompt
+  when closing unsaved changes; Open Recent; new documents open straight
+  into the editor
 - Edited outside MrMark (another editor, git, a script)? A clean document
   reloads automatically; unsaved edits are never touched and conflicts
-  surface through the standard macOS alert on save
-- Windows line endings (CRLF) and UTF-8 BOM survive open + save byte-exactly
-- Offers **once** to become your default Markdown app — never silently, and
-  never asks twice (also available anytime via the MrMark menu)
+  surface on save
+- CRLF line endings and UTF-8 BOM survive open + save byte-exactly
+- Offers **once** to become your default Markdown app — never silently
 
-## Performance
+## Build
 
-Measured on an Apple Silicon Mac, release build:
-
-| | |
-|---|---|
-| Cold launch → readable document | ~250ms (content paints at ~165ms even for a 10k-line file) |
-| Memory (`phys_footprint`) | ~25MB per window |
-| App size | well under 1MB |
-
-Large documents render off the main thread behind an instant plain-text first
-paint; TextKit 2 lays out only the visible viewport. Reproduce the numbers
-yourself: `MrMark --benchmark file.md` from a shell prints a stage breakdown.
-
-## Install
-
-Grab the `.dmg` from [Releases](https://github.com/Jongsic/MrMark/releases)
-and drag MrMark into Applications.
-
-> Builds are not notarized yet — on first launch, right-click the app and
-> choose **Open**.
-
-## Build from source
+### macOS (`macos/`)
 
 Requirements: macOS 14+, Xcode 16+, [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
@@ -76,14 +57,65 @@ Requirements: macOS 14+, Xcode 16+, [XcodeGen](https://github.com/yonaskolb/Xcod
 brew install xcodegen
 cd macos
 xcodegen generate
-open MrMark.xcodeproj    # or:
-xcodebuild -scheme MrMark -configuration Release build
+xcodebuild -scheme MrMark -configuration Release build         # or: open MrMark.xcodeproj
+xcodebuild -scheme MrMark -destination 'platform=macOS' test
 ```
 
-The `.xcodeproj` is generated from [`macos/project.yml`](macos/project.yml)
-and is not checked in. Dependencies: AppKit +
-[swift-markdown](https://github.com/swiftlang/swift-markdown) (Apple's
-cmark-gfm wrapper). That's the whole list.
+The `.xcodeproj` is generated from `macos/project.yml` and is not checked in.
+
+### Windows (`windows/`)
+
+One native Win32 app (C++); the document view is the OS text control
+(RichEdit), so selection, copy, IME, zoom, and screen-reader access all
+behave exactly like Windows. The viewer and the hybrid editor are two modes
+of the same window.
+
+Requirements: Windows 10+ and the MSVC Build Tools
+(`winget install Microsoft.VisualStudio.2022.BuildTools --override
+"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools"`).
+
+```powershell
+cd windows
+build.cmd            # -> bin\MrMark.exe
+build.cmd test       # build + run the unit tests
+bin\MrMark.exe file.md
+```
+
+Dependencies: AppKit + [swift-markdown](https://github.com/swiftlang/swift-markdown)
+on macOS; Win32 + a hand-written GFM parser on Windows. That's the whole
+list.
+
+## Layout
+
+Same shape on both platforms — the viewer is the fast path, editing
+machinery loads lazily, pure logic is unit-tested:
+
+```
+macos/Sources/    App / Document / Viewer / Editor / UI     macos/Tests/
+windows/src/      main (app shell) / parser / formatting / styler / document
+windows/tests/    unit tests for the pure logic
+design/           icon source and brand assets
+```
+
+## Performance
+
+`MrMark --benchmark file.md` prints a stage breakdown on both platforms
+(Windows also logs to `%TEMP%\MrMark-benchmark.log`).
+
+| Release build | macOS (Apple Silicon) | Windows (x64) |
+|---|---|---|
+| Cold launch → readable document | ~250ms | ~130ms (warm ~70ms) |
+| Memory per window | ~25MB | ~4MB |
+| App binary | <1MB | ~0.3MB |
+
+The Windows app's own work (read + parse + build the view) is ~30ms; the
+rest is process start and the first window.
+
+## Install
+
+macOS: grab the `.dmg` from [Releases](https://github.com/Jongsic/MrMark/releases)
+and drag MrMark into Applications (not notarized yet — right-click ▸ Open on
+first launch). Windows: build from source for now.
 
 ## Non-goals
 

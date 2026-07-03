@@ -1,0 +1,4 @@
+// App icon (generated from the shared icon set in design/) and the
+// PerMonitorV2 DPI + Common Controls v6 manifest.
+1 ICON "MrMark.ico"
+1 24 "app.manifest"

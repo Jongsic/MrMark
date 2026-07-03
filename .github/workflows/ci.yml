@@ -32,4 +32,13 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
-  # A `windows` job joins here when the Windows app exists.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same script contributors run locally — build + the unit tests.
+      - name: Build & test
+        working-directory: windows
+        shell: cmd
+        run: build.cmd test
