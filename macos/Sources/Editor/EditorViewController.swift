@@ -59,6 +59,9 @@ final class EditorViewController: NSViewController {
 
         textView.delegate = self
         textView.textStorage?.delegate = self
+        // The scroll view handles file drops (open in a window); the editable
+        // text view must not swallow them by inserting the path/contents.
+        textView.unregisterDraggedTypes()
 
         let scrollView = FileDropScrollView()
         scrollView.documentView = textView
