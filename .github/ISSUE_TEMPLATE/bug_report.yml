@@ -1,0 +1,47 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Open a file with …
+        2. Click …
+        3. Expected … but got …
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: MrMark version
+      description: Shown in the About dialog.
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: macOS 14.5 (Apple Silicon)
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample Markdown (if relevant)
+      description: |
+        If the bug depends on document content, paste a minimal `.md` snippet
+        that reproduces it.
+      render: markdown
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Crash logs, screenshots, file size if it's a performance issue, etc.

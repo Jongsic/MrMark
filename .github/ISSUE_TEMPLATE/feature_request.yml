@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please read first:** MrMark is deliberately minimal. Tabs, sidebars,
+        plugins, cloud sync, accounts, export suites, and telemetry are
+        explicitly out of scope (see the Non-goals section of the README) and
+        requests for them will be closed. Everything else is fair game —
+        especially speed.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the friction you hit, not just the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

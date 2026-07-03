@@ -1,0 +1,11 @@
+--swiftversion 5.10
+--indent 4
+--maxwidth 120
+
+# Keep argument names in AppKit delegate/override methods readable.
+--stripunusedargs closure-only
+
+# Regular comments above top-level statements are fine (e.g. main.swift).
+--disable docComments
+
+--exclude macos/MrMark.xcodeproj,macos/build,build,DerivedData

@@ -1,0 +1,87 @@
+name: MrMark
+options:
+  bundleIdPrefix: com.jongsic
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  swift-markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    from: "0.4.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+
+targets:
+  MrMark:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - Resources
+    dependencies:
+      - package: swift-markdown
+        product: Markdown
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jongsic.MrMark
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleName: MrMark
+        CFBundleDisplayName: MrMark
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: "MIT License © 2026 Jongsic and MrMark contributors"
+        LSApplicationCategoryType: public.app-category.productivity
+        NSSupportsAutomaticTermination: true
+        NSSupportsSuddenTermination: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Default
+            LSItemContentTypes:
+              - net.daringfireball.markdown
+            NSDocumentClass: MrMark.MarkdownDocument
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: net.daringfireball.markdown
+            UTTypeDescription: Markdown Document
+            UTTypeConformsTo:
+              - public.plain-text
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - md
+                - markdown
+                - mdown
+                - mkd
+
+  MrMarkTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: MrMark
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  MrMark:
+    build:
+      targets:
+        MrMark: all
+        MrMarkTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - MrMarkTests

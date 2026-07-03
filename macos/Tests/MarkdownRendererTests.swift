@@ -1,0 +1,154 @@
+@testable import MrMark
+import XCTest
+
+final class MarkdownRendererTests: XCTestCase {
+    private let renderer = MarkdownRenderer(baseURL: nil)
+
+    private func attributes(of rendered: NSAttributedString, containing needle: String)
+        -> [NSAttributedString.Key: Any]
+    {
+        let range = (rendered.string as NSString).range(of: needle)
+        XCTAssertNotEqual(range.location, NSNotFound, "'\(needle)' not found in: \(rendered.string)")
+        return rendered.attributes(at: range.location, effectiveRange: nil)
+    }
+
+    func testHeadingIsLargerAndBold() throws {
+        let rendered = renderer.render("# Title\n\nbody text")
+        let headingFont = attributes(of: rendered, containing: "Title")[.font] as? NSFont
+        let bodyFont = attributes(of: rendered, containing: "body text")[.font] as? NSFont
+
+        XCTAssertNotNil(headingFont)
+        XCTAssertNotNil(bodyFont)
+        XCTAssertGreaterThan(try XCTUnwrap(headingFont?.pointSize), try XCTUnwrap(bodyFont?.pointSize))
+        XCTAssertTrue(try XCTUnwrap(headingFont?.fontDescriptor.symbolicTraits.contains(.bold)))
+    }
+
+    func testStrongAndEmphasisApplyFontTraits() {
+        let rendered = renderer.render("plain **bold** and *italic*")
+        let boldFont = attributes(of: rendered, containing: "bold")[.font] as? NSFont
+        let italicFont = attributes(of: rendered, containing: "italic")[.font] as? NSFont
+
+        XCTAssertTrue(boldFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        XCTAssertTrue(italicFont?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
+    }
+
+    func testCodeBlockIsOneVisualBlock() throws {
+        let rendered = renderer.render("```\nfirst\nmiddle\nlast\n```\n\nafter")
+        let firstStyle = attributes(of: rendered, containing: "first")[.paragraphStyle] as? NSParagraphStyle
+        let lastStyle = attributes(of: rendered, containing: "last")[.paragraphStyle] as? NSParagraphStyle
+
+        // No gaps between the block's own lines; trailing spacing after the last.
+        XCTAssertEqual(try XCTUnwrap(firstStyle).paragraphSpacing, 0)
+        XCTAssertEqual(try XCTUnwrap(lastStyle).paragraphSpacing, 8)
+
+        // Every code line is marked for the full-width background fragment.
+        for needle in ["first", "middle", "last"] {
+            XCTAssertNotNil(attributes(of: rendered, containing: needle)[.mrmarkCodeBlock], needle)
+        }
+        XCTAssertNil(attributes(of: rendered, containing: "after")[.mrmarkCodeBlock])
+    }
+
+    func testTableRendersAsAlignedGridNotRawSource() throws {
+        let source = """
+        | Name | Value |
+        | ---- | ----- |
+        | one  | 1     |
+        | 한글 | 둘    |
+        """
+        let rendered = renderer.render(source)
+
+        XCTAssertFalse(rendered.string.contains("|"), "raw pipes must not leak into the grid")
+        XCTAssertTrue(rendered.string.contains("Name\tValue"))
+        XCTAssertTrue(rendered.string.contains("one\t1"))
+        XCTAssertTrue(rendered.string.contains("한글\t둘"))
+        XCTAssertTrue(rendered.string.contains("─"), "hairline rule under the header")
+
+        let headerFont = attributes(of: rendered, containing: "Name")[.font] as? NSFont
+        XCTAssertTrue(headerFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+
+        let rowStyle = attributes(of: rendered, containing: "one")[.paragraphStyle] as? NSParagraphStyle
+        XCTAssertEqual(try XCTUnwrap(rowStyle).tabStops.count, 2, "one tab stop per column")
+        // Both columns must clear the widest cell (헤더가 굵은 폰트라도 포함해 측정).
+        XCTAssertGreaterThan(try XCTUnwrap(rowStyle).tabStops[0].location, 0)
+    }
+
+    func testSyntaxMarkersAreNotRendered() {
+        let rendered = renderer.render("# Title\n\n**bold** and `code`")
+        XCTAssertFalse(rendered.string.contains("#"))
+        XCTAssertFalse(rendered.string.contains("**"))
+        XCTAssertFalse(rendered.string.contains("`"))
+    }
+
+    func testBulletAndOrderedListMarkers() {
+        let rendered = renderer.render("- first\n- second\n\n1. one\n2. two")
+        XCTAssertTrue(rendered.string.contains("•  first"))
+        XCTAssertTrue(rendered.string.contains("1.  one"))
+        XCTAssertTrue(rendered.string.contains("2.  two"))
+    }
+
+    func testTaskListCheckboxes() {
+        let rendered = renderer.render("- [ ] todo\n- [x] done")
+        XCTAssertTrue(rendered.string.contains("☐"))
+        XCTAssertTrue(rendered.string.contains("☑"))
+    }
+
+    func testCheckboxGlyphsCarryTheirSourceLine() {
+        let rendered = renderer.render("# Title\n\n- [ ] first\n- [x] second\n- plain bullet")
+        XCTAssertEqual(attributes(of: rendered, containing: "☐")[.mrmarkCheckboxLine] as? Int, 3)
+        XCTAssertEqual(attributes(of: rendered, containing: "☑")[.mrmarkCheckboxLine] as? Int, 4)
+        XCTAssertNil(attributes(of: rendered, containing: "•")[.mrmarkCheckboxLine])
+    }
+
+    func testLinkGetsLinkAttribute() {
+        let rendered = renderer.render("see [the site](https://example.com)")
+        let url = attributes(of: rendered, containing: "the site")[.link] as? URL
+        XCTAssertEqual(url?.absoluteString, "https://example.com")
+    }
+
+    func testInlineCodeAndCodeBlockUseMonospacedFont() {
+        let rendered = renderer.render("run `mrmark`\n\n```\nlet x = 1\n```")
+        let inlineFont = attributes(of: rendered, containing: "mrmark")[.font] as? NSFont
+        let blockFont = attributes(of: rendered, containing: "let x = 1")[.font] as? NSFont
+
+        XCTAssertTrue(inlineFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) ?? false)
+        XCTAssertTrue(blockFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) ?? false)
+        XCTAssertTrue(rendered.string.contains("let x = 1"))
+    }
+
+    func testRemoteImageIsNotFetchedButLinked() {
+        let rendered = renderer.render("![alt text](https://example.com/pic.png)")
+        XCTAssertTrue(rendered.string.contains("alt text"))
+        let url = attributes(of: rendered, containing: "alt text")[.link] as? URL
+        XCTAssertEqual(url?.host, "example.com")
+    }
+
+    func testScaleMultipliesAllFontSizes() {
+        let source = "# Title\n\nbody with `code`"
+        let normal = MarkdownRenderer(baseURL: nil, scale: 1).render(source)
+        let zoomed = MarkdownRenderer(baseURL: nil, scale: 2).render(source)
+
+        for needle in ["Title", "body", "code"] {
+            let normalFont = attributes(of: normal, containing: needle)[.font] as? NSFont
+            let zoomedFont = attributes(of: zoomed, containing: needle)[.font] as? NSFont
+            XCTAssertEqual(zoomedFont?.pointSize, (normalFont?.pointSize ?? 0) * 2, "font for '\(needle)'")
+        }
+    }
+
+    func testRendersLargeDocumentQuickly() {
+        let source = (1 ... 10000).map { line -> String in
+            switch line % 7 {
+            case 0: return "## Section \(line)"
+            case 1: return "- [ ] task \(line) with **bold**"
+            default: return "Line \(line) with a [link](https://example.com/\(line)) and `code`."
+            }
+        }.joined(separator: "\n\n")
+
+        let started = CFAbsoluteTimeGetCurrent()
+        let rendered = renderer.render(source)
+        let elapsed = CFAbsoluteTimeGetCurrent() - started
+
+        XCTAssertGreaterThan(rendered.length, 100_000)
+        // Generous CI-safe bound; local runs are far faster. Real budget work is M3.
+        XCTAssertLessThan(elapsed, 5.0, "10k-line render took \(elapsed)s")
+    }
+}

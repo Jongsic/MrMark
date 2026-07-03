@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install xcodegen swiftformat
+
+      - name: Lint (SwiftFormat)
+        run: swiftformat --lint .
+
+      - name: Generate Xcode project
+        working-directory: macos
+        run: xcodegen generate
+
+      - name: Build & test
+        working-directory: macos
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme MrMark \
+            -destination 'platform=macOS' \
+            CODE_SIGN_IDENTITY=- \
+            test
+
+  # A `windows` job joins here when the Windows app exists.
