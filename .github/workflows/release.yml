@@ -30,8 +30,12 @@ jobs:
           files: build/MrMark-*.dmg
           generate_release_notes: true
           body: |
-            > **Note:** the macOS build is not notarized. On first launch,
-            > right-click the app and choose **Open**.
+            Licensed under the [MIT License](https://github.com/Jongsic/MrMark/blob/main/LICENSE)
+            — provided *as is*, without warranty of any kind.
+
+            > **Note:** builds are not code-signed yet. macOS: right-click
+            > the app and choose **Open** on first launch. Windows: if
+            > SmartScreen appears, choose **More info → Run anyway**.
 
   windows:
     runs-on: windows-latest
@@ -44,15 +48,26 @@ jobs:
         shell: cmd
         run: build.cmd test
 
-      - name: Package zip
+      # Per-user setup wizard (Inno Setup ships on the runner image).
+      - name: Build installer
+        working-directory: windows
+        shell: cmd
+        run: |
+          set VER=%GITHUB_REF_NAME:v=%
+          "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" /Q /DAppVersion=%VER% installer.iss
+
+      - name: Package portable zip
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build | Out-Null
-          Compress-Archive -Path windows\bin\MrMark.exe `
-            -DestinationPath "build\MrMark-$env:GITHUB_REF_NAME-windows-x64.zip"
+          Copy-Item LICENSE build\LICENSE.txt
+          Compress-Archive -Path windows\bin\MrMark.exe, build\LICENSE.txt `
+            -DestinationPath "build\MrMark-$env:GITHUB_REF_NAME-windows-x64-portable.zip"
 
       # Attaches to the same release the macos job creates.
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: build/MrMark-*-windows-x64.zip
+          files: |
+            windows/bin/MrMark-Setup-*.exe
+            build/MrMark-*-windows-x64-portable.zip

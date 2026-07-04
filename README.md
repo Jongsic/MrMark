@@ -113,9 +113,20 @@ rest is process start and the first window.
 
 ## Install
 
-macOS: grab the `.dmg` from [Releases](https://github.com/Jongsic/MrMark/releases)
-and drag MrMark into Applications (not notarized yet — right-click ▸ Open on
-first launch). Windows: build from source for now.
+Both from [Releases](https://github.com/Jongsic/MrMark/releases). Builds are
+not code-signed yet — macOS asks for right-click ▸ Open on first launch;
+Windows SmartScreen may ask for **More info → Run anyway**.
+
+**macOS** — grab the `.dmg` and drag MrMark into Applications.
+
+**Windows** — run `MrMark-Setup-<version>.exe`: installs per-user to
+`%LOCALAPPDATA%\Programs\MrMark` (no admin), adds a Start Menu entry and the
+`.md` "Open with" registration, and uninstalls from Settings ▸ Apps. To make
+it the default: right-click a `.md` ▸ Open with ▸ MrMark ▸ Always.
+
+Prefer no installer? `MrMark-<version>-windows-x64-portable.zip` is just
+`MrMark.exe` — put it anywhere and run it; Help ▸ Set as Default wires up
+the file association from wherever it lives.
 
 ## Non-goals
 

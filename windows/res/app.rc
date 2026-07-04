@@ -1,4 +1,26 @@
-// App icon (generated from the shared icon set in design/) and the
-// PerMonitorV2 DPI + Common Controls v6 manifest.
+﻿// App icon (generated from the shared icon set in design/), the
+// PerMonitorV2 DPI + Common Controls v6 manifest, and version info.
 1 ICON "MrMark.ico"
 1 24 "app.manifest"
+
+1 VERSIONINFO
+FILEVERSION 1,0,1,0
+PRODUCTVERSION 1,0,1,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "MrMark - Markdown viewer & editor"
+      VALUE "FileVersion", "1.0.1.0"
+      VALUE "ProductName", "MrMark"
+      VALUE "ProductVersion", "1.0.1.0"
+      VALUE "LegalCopyright", "MIT License"
+      VALUE "OriginalFilename", "MrMark.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
