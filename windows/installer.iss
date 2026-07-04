@@ -1,4 +1,4 @@
-; MrMark per-user installer (Inno Setup 6).
+﻿; MrMark per-user installer (Inno Setup 6).
 ; Compile after build.cmd:  ISCC installer.iss  [/DAppVersion=1.0.0]
 ; Installs to %LOCALAPPDATA%\Programs\MrMark (no admin), adds a Start Menu
 ; entry, registers the .md file association, and shows up in Settings > Apps
@@ -43,7 +43,7 @@ Name: "{autoprograms}\MrMark"; Filename: "{app}\MrMark.exe"
 ; to confirm making it the default (Settings > Default apps, or Open with >
 ; Always). Everything is removed on uninstall.
 Root: HKA; Subkey: "Software\Classes\MrMark.md"; ValueType: string; ValueData: "Markdown Document"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\MrMark.md\DefaultIcon"; ValueType: string; ValueData: """{app}\MrMark.exe"",0"
+Root: HKA; Subkey: "Software\Classes\MrMark.md\DefaultIcon"; ValueType: string; ValueData: """{app}\MrMark.exe"",1"
 Root: HKA; Subkey: "Software\Classes\MrMark.md\shell\open\command"; ValueType: string; ValueData: """{app}\MrMark.exe"" ""%1"""
 Root: HKA; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueName: "MrMark.md"; ValueType: none; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.markdown\OpenWithProgids"; ValueName: "MrMark.md"; ValueType: none; Flags: uninsdeletevalue

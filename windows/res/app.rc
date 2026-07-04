@@ -1,20 +1,21 @@
 ﻿// App icon (generated from the shared icon set in design/), the
 // PerMonitorV2 DPI + Common Controls v6 manifest, and version info.
 1 ICON "MrMark.ico"
+2 ICON "MrMarkDoc.ico"   // document icon for .md file associations
 1 24 "app.manifest"
 
 1 VERSIONINFO
-FILEVERSION 1,0,1,0
-PRODUCTVERSION 1,0,1,0
+FILEVERSION 1,0,2,0
+PRODUCTVERSION 1,0,2,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "FileDescription", "MrMark - Markdown viewer & editor"
-      VALUE "FileVersion", "1.0.1.0"
+      VALUE "FileVersion", "1.0.2.0"
       VALUE "ProductName", "MrMark"
-      VALUE "ProductVersion", "1.0.1.0"
+      VALUE "ProductVersion", "1.0.2.0"
       VALUE "LegalCopyright", "MIT License"
       VALUE "OriginalFilename", "MrMark.exe"
     END

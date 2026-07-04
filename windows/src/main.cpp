@@ -48,6 +48,7 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "version.lib")
 #pragma comment(lib, "windowscodecs.lib")
 
 using Microsoft::WRL::ComPtr;
@@ -1307,7 +1308,7 @@ static void RegisterProgId()
         RegSetValueExW(progId, nullptr, 0, REG_SZ, (const BYTE*)name,
                        (DWORD)((wcslen(name) + 1) * sizeof(wchar_t)));
         HKEY sub;
-        std::wstring icon = L"\"" + std::wstring(exe) + L"\",0";
+        std::wstring icon = L"\"" + std::wstring(exe) + L"\",1"; // the document icon
         if (RegCreateKeyExW(progId, L"DefaultIcon", 0, nullptr, 0, KEY_WRITE, nullptr, &sub,
                             nullptr) == ERROR_SUCCESS) {
             RegSetValueExW(sub, nullptr, 0, REG_SZ, (const BYTE*)icon.c_str(),
@@ -1780,9 +1781,33 @@ static void RefreshRecentMenu()
 
 // MARK: - Actions
 
+/// The version baked into the exe's VERSIONINFO — one source of truth
+/// (the release workflow stamps the tag into app.rc).
+static std::wstring AppVersion()
+{
+    wchar_t path[MAX_PATH];
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    DWORD handle = 0;
+    DWORD size = GetFileVersionInfoSizeW(path, &handle);
+    if (size) {
+        std::vector<char> data(size);
+        VS_FIXEDFILEINFO* info = nullptr;
+        UINT length = 0;
+        if (GetFileVersionInfoW(path, 0, size, data.data())
+            && VerQueryValueW(data.data(), L"\\", (void**)&info, &length) && info) {
+            wchar_t buffer[32];
+            swprintf_s(buffer, L"%u.%u.%u", HIWORD(info->dwFileVersionMS),
+                       LOWORD(info->dwFileVersionMS), HIWORD(info->dwFileVersionLS));
+            return buffer;
+        }
+    }
+    return L"dev";
+}
+
 static void ShowAbout()
 {
-    TaskDialog(g_app.hwnd, nullptr, L"About MrMark", L"MrMark 0.1",
+    std::wstring title = L"MrMark " + AppVersion();
+    TaskDialog(g_app.hwnd, nullptr, L"About MrMark", title.c_str(),
                L"An ultra-fast, minimal Markdown viewer & editor.\n"
                L"One file = one window. No tabs, no plugins, no cloud, no telemetry.\n\n"
                L"MIT License - github.com/Jongsic/MrMark",

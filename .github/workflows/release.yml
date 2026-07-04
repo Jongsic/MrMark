@@ -42,6 +42,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The tag is the single source of the version: stamp it into the exe's
+      # VERSIONINFO so file properties and the About dialog match the release.
+      - name: Stamp version
+        shell: pwsh
+        run: |
+          $v = $env:GITHUB_REF_NAME.TrimStart('v')
+          $parts = (($v + '.0.0.0').Split('.')[0..3]) -join ','
+          $rc = 'windows/res/app.rc'
+          (Get-Content $rc -Raw) `
+            -replace 'FILEVERSION \d+,\d+,\d+,\d+', "FILEVERSION $parts" `
+            -replace 'PRODUCTVERSION \d+,\d+,\d+,\d+', "PRODUCTVERSION $parts" `
+            -replace '"FileVersion", "[\d.]+"', """FileVersion"", ""$v""" `
+            -replace '"ProductVersion", "[\d.]+"', """ProductVersion"", ""$v""" |
+            Set-Content $rc
+
       # Same script contributors run locally; tests gate the release build.
       - name: Build & test
         working-directory: windows
