@@ -1,16 +1,9 @@
 version: 2
 updates:
-  - package-ecosystem: swift
-    directory: "/"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    ignore:
-      # Take major (potentially breaking) upgrades deliberately, by hand.
-      # Patch/minor updates (including security fixes) still flow automatically.
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
-
+  # Note: Swift dependencies are managed through the Xcode project
+  # (macos/MrMark.xcodeproj), which Dependabot's swift ecosystem does not
+  # support — it requires a Package.swift manifest at the configured
+  # directory. Update SPM packages manually via Xcode.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
