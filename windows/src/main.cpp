@@ -273,6 +273,10 @@ static bool ResolveLocalImage(const std::wstring& src, std::wstring& outPath)
     for (auto& c : candidate) {
         if (c == L'/') c = L'\\';
     }
+    // Never resolve UNC/device paths (\\server\share, \\?\, \\.\): they fetch
+    // over SMB — a remote fetch and a NetNTLM credential-leak vector, exactly
+    // what "remote images are never fetched" exists to prevent.
+    if (candidate.rfind(L"\\\\", 0) == 0) return false;
     if (!(candidate.size() >= 2 && (candidate[1] == L':' || candidate[0] == L'\\'))) {
         if (g_baseDir.empty()) return false;
         candidate = g_baseDir + L"\\" + candidate;

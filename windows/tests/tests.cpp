@@ -8,6 +8,7 @@
 #include "document.h"
 #include "formatting.h"
 #include "parser.h"
+#include "spec_corpus.h"
 #include "styler.h"
 
 static int g_failures = 0;
@@ -414,12 +415,89 @@ static void TestStyler()
     }
 }
 
+// MARK: - Spec corpus (robustness)
+
+static std::string Base64Decode(const char* s)
+{
+    auto sextet = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1; // '=' padding and anything else
+    };
+    std::string out;
+    int buffer = 0, bits = 0;
+    for (const char* p = s; *p; ++p) {
+        int v = sextet(*p);
+        if (v < 0) continue;
+        buffer = (buffer << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+// UTF-8 bytes -> UTF-16 wstring (surrogate pairs for astral code points), the
+// same encoding the app feeds the parser after reading a file.
+static std::wstring WidenUtf8(const std::string& s)
+{
+    std::wstring out;
+    size_t i = 0, n = s.size();
+    while (i < n) {
+        unsigned char b = static_cast<unsigned char>(s[i]);
+        unsigned int cp;
+        int extra;
+        if (b < 0x80) { cp = b; extra = 0; }
+        else if (b >= 0xF0) { cp = b & 0x07; extra = 3; }
+        else if (b >= 0xE0) { cp = b & 0x0F; extra = 2; }
+        else if (b >= 0xC0) { cp = b & 0x1F; extra = 1; }
+        else { cp = b; extra = 0; } // stray continuation byte, pass through
+        if (i + extra >= n) extra = 0;
+        for (int k = 1; k <= extra; ++k) cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3F);
+        i += extra + 1;
+        if (cp > 0xFFFF) {
+            cp -= 0x10000;
+            out.push_back(static_cast<wchar_t>(0xD800 + (cp >> 10)));
+            out.push_back(static_cast<wchar_t>(0xDC00 + (cp & 0x3FF)));
+        } else {
+            out.push_back(static_cast<wchar_t>(cp));
+        }
+    }
+    return out;
+}
+
+// The parser is a GFM subset, so we don't diff against the spec's HTML; this is
+// a stability suite — every CommonMark example (and the pathological nesting
+// cases appended by the generator) must parse without crashing or hanging.
+static void TestSpecCorpus()
+{
+    int processed = 0;
+    for (int i = 0; i < spec::kCorpusCount; ++i) {
+        std::wstring source = WidenUtf8(Base64Decode(spec::kCorpusBase64[i]));
+        auto blocks = md::Parse(source);
+        for (const auto& block : blocks) {
+            if (block.type == md::BlockType::Paragraph || block.type == md::BlockType::Heading) {
+                (void)md::PlainText(block.inlines);
+            }
+        }
+        (void)md::PlainText(md::ParseInlines(source));
+        processed++;
+    }
+    CHECK(processed == spec::kCorpusCount);
+}
+
 int wmain()
 {
     TestParser();
     TestFormatting();
     TestDocument();
     TestStyler();
+    TestSpecCorpus();
     wprintf(L"%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

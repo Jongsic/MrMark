@@ -417,7 +417,7 @@ final class MarkdownRenderer {
             return NSAttributedString(string: code.code, attributes: attributes)
 
         case let link as Markdown.Link:
-            if let destination = link.destination, let url = URL(string: destination) {
+            if let url = safeLinkURL(link.destination) {
                 attributes[.link] = url
             }
             return renderChildren(of: markup, attributes: attributes)
@@ -456,10 +456,23 @@ final class MarkdownRenderer {
         }
 
         var linkAttributes = attributes
-        if let url = URL(string: source) {
+        if let url = safeLinkURL(source) {
             linkAttributes[.link] = url
         }
         return NSAttributedString(string: "🖼 \(alt.isEmpty ? source : alt)", attributes: linkAttributes)
+    }
+
+    /// Only http(s) and mailto destinations are made clickable; everything else
+    /// — javascript:, file:, data:, custom app schemes — renders as plain text,
+    /// so a crafted document can't trigger actions or local access on click.
+    /// Same allowlist GitHub and markdown-it apply.
+    private func safeLinkURL(_ destination: String?) -> URL? {
+        guard let destination,
+              let url = URL(string: destination),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" || scheme == "mailto"
+        else { return nil }
+        return url
     }
 
     private func resolveLocalURL(_ source: String) -> URL? {
