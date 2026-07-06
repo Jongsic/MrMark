@@ -1,8 +1,9 @@
 name: Release
 
 # Tag a commit `vX.Y.Z` and push the tag to cut a release.
-# Builds are ad-hoc signed (not notarized): users must right-click → Open
-# on first launch. Revisit Developer ID signing + notarization later.
+# Builds are ad-hoc signed (not notarized): on macOS 15+ users must approve
+# the app via System Settings ▸ Privacy & Security ▸ Open Anyway (right-click
+# → Open no longer works). Revisit Developer ID signing + notarization later.
 
 on:
   push:
@@ -33,9 +34,17 @@ jobs:
             Licensed under the [MIT License](https://github.com/Jongsic/MrMark/blob/main/LICENSE)
             — provided *as is*, without warranty of any kind.
 
-            > **Note:** builds are not code-signed yet. macOS: right-click
-            > the app and choose **Open** on first launch. Windows: if
-            > SmartScreen appears, choose **More info → Run anyway**.
+            > **⚠️ First launch — builds are not notarized yet.**
+            >
+            > **macOS** will say it can't verify MrMark and only offer to
+            > move it to the Trash. Click **Done**, open **System Settings ▸
+            > Privacy & Security**, scroll down to *"MrMark" was blocked to
+            > protect your Mac*, click **Open Anyway**, and confirm. Needed
+            > once — afterwards it opens normally. (macOS 14 and earlier:
+            > right-click the app ▸ **Open**.)
+            >
+            > **Windows**: if SmartScreen appears, choose
+            > **More info → Run anyway**.
 
   windows:
     runs-on: windows-latest

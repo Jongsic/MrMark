@@ -114,12 +114,24 @@ rest is process start and the first window.
 ## Install
 
 Both from [Releases](https://github.com/Jongsic/MrMark/releases). Builds are
-not code-signed yet — macOS asks for right-click ▸ Open on first launch;
-Windows SmartScreen may ask for **More info → Run anyway**.
+not code-signed or notarized yet, so both OSes warn on first launch — the
+one-time steps to get past that are below.
 
-**macOS** — grab the `.dmg` and drag MrMark into Applications.
+**macOS** — grab the `.dmg` and drag MrMark into Applications. On first
+launch, macOS says it can't verify the app and only offers to move it to
+the Trash. Don't — instead:
 
-**Windows** — run `MrMark-Setup-<version>.exe`: installs per-user to
+1. Dismiss the warning (**Done**).
+2. Open **System Settings ▸ Privacy & Security** and scroll down to the
+   *Security* section — you'll see *"MrMark" was blocked to protect your
+   Mac* with an **Open Anyway** button.
+3. Click **Open Anyway** and confirm. macOS remembers this; from then on
+   MrMark opens normally.
+
+(On macOS 14 and earlier, right-click the app ▸ **Open** is enough.)
+
+**Windows** — if SmartScreen appears, choose **More info → Run anyway**.
+Run `MrMark-Setup-<version>.exe`: installs per-user to
 `%LOCALAPPDATA%\Programs\MrMark` (no admin), adds a Start Menu entry and the
 `.md` "Open with" registration, and uninstalls from Settings ▸ Apps. To make
 it the default: right-click a `.md` ▸ Open with ▸ MrMark ▸ Always.
