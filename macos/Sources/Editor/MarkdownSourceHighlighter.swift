@@ -64,6 +64,15 @@ final class MarkdownSourceHighlighter {
             target = NSRange(location: target.location, length: text.length - target.location)
         }
 
+        // Too deeply nested to parse safely — leave the source plain rather than
+        // crash swift-markdown's parser (see markdownNestingExceedsLimit).
+        if markdownNestingExceedsLimit(storage.string) {
+            storage.beginEditing()
+            storage.setAttributes(baseAttributes, range: target)
+            storage.endEditing()
+            return
+        }
+
         let (document, map) = parse(storage.string)
 
         storage.beginEditing()

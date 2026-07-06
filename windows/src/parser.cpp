@@ -12,7 +12,13 @@ struct Line {
     int sourceLine; // 1-based
 };
 
-std::vector<Block> ParseBlocks(const std::vector<Line>& lines);
+// Blockquotes, lists, links and emphasis all recurse on nested input, so a
+// crafted document (e.g. thousands of `>` or `[`) could otherwise exhaust the
+// stack. Cap nesting well above any real document and stop recursing past it.
+constexpr int kMaxNestingDepth = 100;
+
+std::vector<Block> ParseBlocks(const std::vector<Line>& lines, int depth);
+std::vector<Inline> ParseInlinesImpl(const std::wstring& text, int depth);
 
 // MARK: - Small helpers
 
@@ -197,8 +203,9 @@ bool QuoteContent(const std::wstring& line, std::wstring& out)
     return true;
 }
 
-bool TryParseQuote(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks)
+bool TryParseQuote(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks, int depth)
 {
+    if (depth >= kMaxNestingDepth) return false;
     std::wstring content;
     if (!QuoteContent(lines[i].text, content)) return false;
     std::vector<Line> inner;
@@ -208,7 +215,7 @@ bool TryParseQuote(const std::vector<Line>& lines, size_t& i, std::vector<Block>
     }
     Block block;
     block.type = BlockType::Quote;
-    block.children = ParseBlocks(inner);
+    block.children = ParseBlocks(inner, depth + 1);
     blocks.push_back(std::move(block));
     return true;
 }
@@ -251,8 +258,9 @@ bool ListMarker(const std::wstring& line, Marker& out)
     return true;
 }
 
-bool TryParseList(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks)
+bool TryParseList(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks, int depth)
 {
+    if (depth >= kMaxNestingDepth) return false;
     Marker first;
     if (!ListMarker(lines[i].text, first) || LeadingSpaces(lines[i].text) > 3) return false;
 
@@ -303,7 +311,7 @@ bool TryParseList(const std::vector<Line>& lines, size_t& i, std::vector<Block>&
         ListItem item;
         item.check = check;
         item.sourceLine = markerLine;
-        item.children = ParseBlocks(itemLines);
+        item.children = ParseBlocks(itemLines, depth + 1);
         list.items.push_back(std::move(item));
 
         // A blank line between items keeps the list going only if another item follows.
@@ -485,7 +493,7 @@ void ParseParagraph(const std::vector<Line>& lines, size_t& i, std::vector<Block
     blocks.push_back(std::move(block));
 }
 
-std::vector<Block> ParseBlocks(const std::vector<Line>& lines)
+std::vector<Block> ParseBlocks(const std::vector<Line>& lines, int depth)
 {
     std::vector<Block> blocks;
     size_t i = 0;
@@ -503,8 +511,8 @@ std::vector<Block> ParseBlocks(const std::vector<Line>& lines)
             i++;
             continue;
         }
-        if (TryParseQuote(lines, i, blocks)) continue;
-        if (TryParseList(lines, i, blocks)) continue;
+        if (TryParseQuote(lines, i, blocks, depth)) continue;
+        if (TryParseList(lines, i, blocks, depth)) continue;
         if (TryParseTable(lines, i, blocks)) continue;
         if (TryParseHtmlBlock(lines, i, blocks)) continue;
         ParseParagraph(lines, i, blocks);
@@ -560,7 +568,7 @@ bool TryParseCodeSpan(const std::wstring& text, size_t pos, Inline& node, size_t
     return false;
 }
 
-bool TryParseEmphasis(const std::wstring& text, size_t pos, Inline& node, size_t& end)
+bool TryParseEmphasis(const std::wstring& text, size_t pos, Inline& node, size_t& end, int depth)
 {
     wchar_t marker = text[pos];
     int run = std::min(RunLength(text, pos, text.size(), marker), 3);
@@ -574,7 +582,7 @@ bool TryParseEmphasis(const std::wstring& text, size_t pos, Inline& node, size_t
         if (close < 0) continue;
         std::wstring inner = text.substr(pos + length, close - (int)pos - length);
         if (inner.empty()) continue;
-        auto children = ParseInlines(inner);
+        auto children = ParseInlinesImpl(inner, depth + 1);
         if (length == 3) {
             Inline strong;
             strong.type = InlineType::Strong;
@@ -592,17 +600,17 @@ bool TryParseEmphasis(const std::wstring& text, size_t pos, Inline& node, size_t
     return false;
 }
 
-bool TryParseLink(const std::wstring& text, size_t bracket, Inline& node, size_t& end)
+bool TryParseLink(const std::wstring& text, size_t bracket, Inline& node, size_t& end, int depth)
 {
-    int depth = 0;
+    int bracketDepth = 0;
     int close = -1;
     for (size_t i = bracket; i < text.size(); i++) {
         wchar_t c = text[i];
         if (c == L'\\') { i++; continue; }
-        if (c == L'[') depth++;
+        if (c == L'[') bracketDepth++;
         else if (c == L']') {
-            depth--;
-            if (depth == 0) { close = (int)i; break; }
+            bracketDepth--;
+            if (bracketDepth == 0) { close = (int)i; break; }
         }
     }
     if (close < 0 || close + 1 >= (int)text.size() || text[close + 1] != L'(') return false;
@@ -632,7 +640,7 @@ bool TryParseLink(const std::wstring& text, size_t bracket, Inline& node, size_t
 
     node.type = InlineType::Link;
     node.dest = destination;
-    node.children = ParseInlines(text.substr(bracket + 1, close - (int)bracket - 1));
+    node.children = ParseInlinesImpl(text.substr(bracket + 1, close - (int)bracket - 1), depth + 1);
     end = endParen + 1;
     return true;
 }
@@ -690,10 +698,19 @@ bool TryParseInlineHtml(const std::wstring& text, size_t pos, Inline& node, size
     return true;
 }
 
-} // namespace
-
-std::vector<Inline> ParseInlines(const std::wstring& text)
+std::vector<Inline> ParseInlinesImpl(const std::wstring& text, int depth)
 {
+    if (depth >= kMaxNestingDepth) {
+        std::vector<Inline> nodes;
+        if (!text.empty()) {
+            Inline t;
+            t.type = InlineType::Text;
+            t.text = text;
+            nodes.push_back(std::move(t));
+        }
+        return nodes;
+    }
+
     std::vector<Inline> nodes;
     std::wstring buffer;
 
@@ -741,7 +758,7 @@ std::vector<Inline> ParseInlines(const std::wstring& text)
         }
         if (c == L'*' || c == L'_') {
             Inline node; size_t end;
-            if (TryParseEmphasis(text, pos, node, end)) {
+            if (TryParseEmphasis(text, pos, node, end, depth)) {
                 flush();
                 nodes.push_back(std::move(node));
                 pos = end;
@@ -756,7 +773,7 @@ std::vector<Inline> ParseInlines(const std::wstring& text)
                 flush();
                 Inline node;
                 node.type = InlineType::Strike;
-                node.children = ParseInlines(text.substr(pos + 2, close - (int)pos - 2));
+                node.children = ParseInlinesImpl(text.substr(pos + 2, close - (int)pos - 2), depth + 1);
                 nodes.push_back(std::move(node));
                 pos = close + 2;
                 continue;
@@ -764,7 +781,7 @@ std::vector<Inline> ParseInlines(const std::wstring& text)
         }
         if (c == L'!' && pos + 1 < text.size() && text[pos + 1] == L'[') {
             Inline link; size_t end;
-            if (TryParseLink(text, pos + 1, link, end)) {
+            if (TryParseLink(text, pos + 1, link, end, depth)) {
                 flush();
                 Inline image;
                 image.type = InlineType::Image;
@@ -777,7 +794,7 @@ std::vector<Inline> ParseInlines(const std::wstring& text)
         }
         if (c == L'[') {
             Inline link; size_t end;
-            if (TryParseLink(text, pos, link, end)) {
+            if (TryParseLink(text, pos, link, end, depth)) {
                 flush();
                 nodes.push_back(std::move(link));
                 pos = end;
@@ -806,6 +823,13 @@ std::vector<Inline> ParseInlines(const std::wstring& text)
 
     flush();
     return nodes;
+}
+
+} // namespace
+
+std::vector<Inline> ParseInlines(const std::wstring& text)
+{
+    return ParseInlinesImpl(text, 0);
 }
 
 std::wstring PlainText(const std::vector<Inline>& inlines)
@@ -845,7 +869,7 @@ std::vector<Block> Parse(const std::wstring& source)
     for (size_t i = 0; i < raw.size(); i++) {
         lines.push_back({ std::move(raw[i]), (int)i + 1 });
     }
-    return ParseBlocks(lines);
+    return ParseBlocks(lines, 0);
 }
 
 } // namespace md

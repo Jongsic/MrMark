@@ -9,9 +9,62 @@ extension NSAttributedString.Key {
     static let mrmarkCheckboxLine = NSAttributedString.Key("mrmark.checkboxLine")
 }
 
+/// Deepest block nesting we let reach swift-markdown. Its parser recurses once
+/// per nesting level and large documents parse on a background thread with a
+/// small (~512 KB) stack, so pathologically nested input (thousands of `>` or
+/// deeply indented lists) crashes inside `Document(parsing:)` — an
+/// uncatchable SIGSEGV — before any of our own code runs. Real documents nest a
+/// handful of levels; measured overflow is ~200, so this leaves wide margin.
+let markdownMaxParseNesting = 64
+/// Inline emphasis/strike nesting shows up only as a long run of the same
+/// delimiter (`***…`); alternating markers and links don't nest. Kept well
+/// above decorative separators (`****`) but far below the parser's limit.
+let markdownMaxDelimiterRun = 256
+
+/// Cheap conservative pre-parse guard. Two things upper-bound how deep
+/// swift-markdown will recurse: the leading `>` + indentation on a line (block
+/// nesting) and the longest run of `* _ ~` (inline nesting). One UTF-8 pass with
+/// early-exit (~6 ms on a 4 MB document, µs on typical ones). When this is true,
+/// callers must skip parsing and fall back to plain text rather than crash.
+func markdownNestingExceedsLimit(
+    _ source: String,
+    blockLimit: Int = markdownMaxParseNesting,
+    runLimit: Int = markdownMaxDelimiterRun
+) -> Bool {
+    var atLineStart = true
+    var quotes = 0
+    var spaces = 0
+    var runByte: UInt8 = 0
+    var runLength = 0
+    for byte in source.utf8 {
+        if byte == 0x2A || byte == 0x5F || byte == 0x7E { // * _ ~
+            if byte == runByte { runLength += 1 } else { runByte = byte; runLength = 1 }
+            if runLength > runLimit { return true }
+        } else {
+            runByte = 0; runLength = 0
+        }
+        if byte == 0x0A { // newline — a line made only of markers still counts
+            if quotes + spaces / 2 > blockLimit { return true }
+            atLineStart = true; quotes = 0; spaces = 0
+            continue
+        }
+        if atLineStart {
+            switch byte {
+            case 0x20: spaces += 1          // space
+            case 0x09: spaces += 4          // tab
+            case 0x3E: quotes += 1; spaces = 0 // '>'
+            default:
+                if quotes + spaces / 2 > blockLimit { return true }
+                atLineStart = false
+            }
+        }
+    }
+    return quotes + spaces / 2 > blockLimit // last line without a trailing newline
+}
+
 /// Renders GFM Markdown into an NSAttributedString for the read-only viewer.
 /// Uses semantic NSColors throughout so dark mode works without re-rendering.
-struct MarkdownRenderer {
+final class MarkdownRenderer {
     /// Base directory for resolving relative image paths (the document's folder).
     let baseURL: URL?
     /// Text zoom factor (1 = 100%). Per-window, never persisted.
@@ -27,6 +80,16 @@ struct MarkdownRenderer {
     private let headingFonts: [NSFont]
     private let bodyAttributes: Attributes
     private let constantPrefixWidths: [String: CGFloat]
+
+    // Pathologically nested markup (thousands of `>`/`[`, or alternating
+    // list/quote) would recurse until the stack overflows — swift-markdown can
+    // build such trees, and large documents render on a background thread with a
+    // small (~512 KB) stack. Stop descending well before that and show an
+    // ellipsis. Real documents nest a handful of levels; measured overflow is a
+    // few hundred, so this leaves wide margin on both sides. `depth` (visual
+    // indentation) can't serve here: renderInlineContainer resets it to 0.
+    private static let maxNestingDepth = 80
+    private var nestingDepth = 0
 
     init(baseURL: URL? = nil, scale: CGFloat = 1) {
         self.baseURL = baseURL
@@ -44,6 +107,11 @@ struct MarkdownRenderer {
     }
 
     func render(_ source: String) -> NSAttributedString {
+        // Too deeply nested to parse safely — show the raw source instead of
+        // crashing the parser (see markdownNestingExceedsLimit).
+        if markdownNestingExceedsLimit(source) {
+            return NSAttributedString(string: source, attributes: bodyAttributes)
+        }
         let document = Document(parsing: source)
         let result = NSMutableAttributedString()
         var first = true
@@ -82,6 +150,11 @@ struct MarkdownRenderer {
     // MARK: - Blocks
 
     private func renderBlock(_ markup: Markup, depth: Int) -> NSAttributedString {
+        nestingDepth += 1
+        defer { nestingDepth -= 1 }
+        if nestingDepth > Self.maxNestingDepth {
+            return NSAttributedString(string: "…", attributes: bodyAttributes)
+        }
         switch markup {
         case let heading as Heading:
             var attributes = bodyAttributes
@@ -310,6 +383,11 @@ struct MarkdownRenderer {
     }
 
     private func renderInline(_ markup: Markup, attributes: Attributes) -> NSAttributedString {
+        nestingDepth += 1
+        defer { nestingDepth -= 1 }
+        if nestingDepth > Self.maxNestingDepth {
+            return NSAttributedString(string: "…", attributes: attributes)
+        }
         var attributes = attributes
         switch markup {
         case let text as Markdown.Text:
