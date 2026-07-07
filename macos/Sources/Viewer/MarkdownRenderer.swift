@@ -50,8 +50,8 @@ func markdownNestingExceedsLimit(
         }
         if atLineStart {
             switch byte {
-            case 0x20: spaces += 1          // space
-            case 0x09: spaces += 4          // tab
+            case 0x20: spaces += 1 // space
+            case 0x09: spaces += 4 // tab
             case 0x3E: quotes += 1; spaces = 0 // '>'
             default:
                 if quotes + spaces / 2 > blockLimit { return true }

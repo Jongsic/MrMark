@@ -27,7 +27,8 @@ final class SpecConformanceTests: XCTestCase {
     func testNestingGuardCatchesPathologicalInputAndSparesNormalText() {
         XCTAssertTrue(markdownNestingExceedsLimit(String(repeating: "> ", count: 5000) + "x"))
         XCTAssertTrue(markdownNestingExceedsLimit(
-            (0..<3000).map { String(repeating: "  ", count: $0) + "- x" }.joined(separator: "\n")))
+            (0 ..< 3000).map { String(repeating: "  ", count: $0) + "- x" }.joined(separator: "\n")
+        ))
         XCTAssertTrue(markdownNestingExceedsLimit(String(repeating: "*", count: 5000) + "x"))
         XCTAssertFalse(markdownNestingExceedsLimit("# Title\n\n- a\n  - b\n    - c\n\n> quote\n\n**bold**\n"))
     }

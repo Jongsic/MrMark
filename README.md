@@ -114,27 +114,41 @@ rest is process start and the first window.
 ## Install
 
 Both from [Releases](https://github.com/Jongsic/MrMark/releases). Builds are
-not code-signed or notarized yet, so both OSes warn on first launch — the
-one-time steps to get past that are below.
+not code-signed or notarized yet, so each OS shows a scary warning **once**
+on first launch. Follow the steps for your OS below — after that, MrMark
+opens like any other app.
 
-**macOS** — grab the `.dmg` and drag MrMark into Applications. On first
-launch, macOS says it can't verify the app and only offers to move it to
-the Trash. Don't — instead:
+### First launch on macOS 15 (Sequoia) and later
 
-1. Dismiss the warning (**Done**).
-2. Open **System Settings ▸ Privacy & Security** and scroll down to the
-   *Security* section — you'll see *"MrMark" was blocked to protect your
-   Mac* with an **Open Anyway** button.
-3. Click **Open Anyway** and confirm. macOS remembers this; from then on
-   MrMark opens normally.
+Grab the `.dmg` and drag MrMark into Applications, then:
 
-(On macOS 14 and earlier, right-click the app ▸ **Open** is enough.)
+1. Open MrMark. macOS says it **can't verify** the app and only offers
+   *Move to Trash* or *Done*.
+2. Click **Done** — do *not* move it to the Trash.
+3. Open **System Settings ▸ Privacy & Security**.
+4. Scroll down to the **Security** section. You'll see
+   *"MrMark" was blocked to protect your Mac*.
+5. Click **Open Anyway**.
+6. Confirm with **Open** (enter your password or Touch ID if asked).
 
-**Windows** — if SmartScreen appears, choose **More info → Run anyway**.
-Run `MrMark-Setup-<version>.exe`: installs per-user to
-`%LOCALAPPDATA%\Programs\MrMark` (no admin), adds a Start Menu entry and the
-`.md` "Open with" registration, and uninstalls from Settings ▸ Apps. To make
-it the default: right-click a `.md` ▸ Open with ▸ MrMark ▸ Always.
+That's it — macOS remembers the choice permanently.
+
+### First launch on macOS 14 and earlier
+
+1. In Finder, **right-click** (or Control-click) MrMark.app.
+2. Choose **Open**.
+3. Click **Open** in the confirmation dialog. Needed only once.
+
+### First launch on Windows
+
+1. Run `MrMark-Setup-<version>.exe` (or `MrMark.exe` from the portable zip).
+2. If SmartScreen shows *"Windows protected your PC"*, click **More info**.
+3. Click **Run anyway**. Needed only once per download.
+
+The installer installs per-user to `%LOCALAPPDATA%\Programs\MrMark` (no
+admin), adds a Start Menu entry and the `.md` "Open with" registration, and
+uninstalls from Settings ▸ Apps. To make it the default: right-click a
+`.md` ▸ Open with ▸ MrMark ▸ Always.
 
 Prefer no installer? `MrMark-<version>-windows-x64-portable.zip` is just
 `MrMark.exe` — put it anywhere and run it; Help ▸ Set as Default wires up
