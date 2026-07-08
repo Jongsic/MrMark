@@ -201,6 +201,14 @@ static void TestParser()
         CHECK(blocks[0].rows[0].size() == 3); // padded to header width
     }
     CHECK(md::Parse(L"just | a pipe")[0].type == md::BlockType::Paragraph);
+    { // a table interrupts a paragraph (no blank line before it)
+        auto blocks = md::Parse(
+            L"**Section**\n| File | Note |\n|------|------|\n| a.md | x |");
+        CHECK(blocks.size() == 2);
+        CHECK(blocks[0].type == md::BlockType::Paragraph);
+        CHECK(blocks[1].type == md::BlockType::Table);
+        CHECK(blocks[1].header.size() == 2 && blocks[1].rows.size() == 1);
+    }
 
     // Thematic breaks
     for (const wchar_t* source : { L"---", L"***", L"- - -" }) {

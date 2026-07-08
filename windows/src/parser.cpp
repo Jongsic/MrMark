@@ -449,6 +449,16 @@ bool TryParseHtmlBlock(const std::vector<Line>& lines, size_t& i, std::vector<Bl
 
 // MARK: - Paragraphs
 
+bool StartsTable(const std::vector<Line>& lines, size_t i)
+{
+    if (i + 1 >= lines.size()) return false;
+    if (lines[i].text.find(L'|') == std::wstring::npos) return false;
+    if (!IsTableDelimiterRow(lines[i + 1].text)) return false;
+    auto header = SplitTableRow(lines[i].text);
+    auto delimiter = SplitTableRow(lines[i + 1].text);
+    return !header.empty() && header.size() == delimiter.size();
+}
+
 bool StartsOtherBlock(const std::wstring& line)
 {
     Fence fence;
@@ -462,7 +472,8 @@ void ParseParagraph(const std::vector<Line>& lines, size_t& i, std::vector<Block
 {
     std::vector<std::wstring> collected;
     while (i < lines.size() && !IsBlank(lines[i].text)
-           && (collected.empty() || !StartsOtherBlock(lines[i].text))) {
+           && (collected.empty()
+               || (!StartsOtherBlock(lines[i].text) && !StartsTable(lines, i)))) {
         collected.push_back(lines[i].text);
         i++;
     }
