@@ -425,6 +425,60 @@ bool LooksLikeHtmlTagStart(const std::wstring& text, size_t lt)
         || text[pos] == L'>' || text[pos] == L'/';
 }
 
+// Tag names that may open a CommonMark type-1 or type-6 HTML block — the only
+// HTML starts allowed to interrupt a paragraph. Generic tags (type 7, e.g.
+// <span>) must not, or prose containing inline HTML would split mid-paragraph.
+bool IsParagraphInterruptingTag(const std::wstring& name, bool closing)
+{
+    static const wchar_t* const kType1[] = { L"pre", L"script", L"style", L"textarea" };
+    static const wchar_t* const kType6[] = {
+        L"address", L"article", L"aside", L"base", L"basefont", L"blockquote",
+        L"body", L"caption", L"center", L"col", L"colgroup", L"dd", L"details",
+        L"dialog", L"dir", L"div", L"dl", L"dt", L"fieldset", L"figcaption",
+        L"figure", L"footer", L"form", L"frame", L"frameset", L"h1", L"h2",
+        L"h3", L"h4", L"h5", L"h6", L"head", L"header", L"hr", L"html",
+        L"iframe", L"legend", L"li", L"link", L"main", L"menu", L"menuitem",
+        L"nav", L"noframes", L"ol", L"optgroup", L"option", L"p", L"param",
+        L"section", L"summary", L"table", L"tbody", L"td", L"tfoot", L"th",
+        L"thead", L"title", L"tr", L"track", L"ul",
+    };
+    for (const wchar_t* candidate : kType6) {
+        if (name == candidate) return true;
+    }
+    if (closing) return false; // type 1 opens with a start tag only
+    for (const wchar_t* candidate : kType1) {
+        if (name == candidate) return true;
+    }
+    return false;
+}
+
+bool StartsHtmlBlock(const std::wstring& text)
+{
+    int indent = LeadingSpaces(text);
+    if (indent > 3 || indent >= (int)text.size() || text[indent] != L'<') return false;
+    size_t pos = indent + 1;
+    if (pos >= text.size()) return false;
+    if (text[pos] == L'?') return true; // processing instruction (type 3)
+    if (text[pos] == L'!') { // comment, declaration, or CDATA (types 2/4/5)
+        return pos + 1 < text.size()
+            && (text[pos + 1] == L'-' || text[pos + 1] == L'[' || IsAsciiLetter(text[pos + 1]));
+    }
+    bool closing = text[pos] == L'/';
+    if (closing) pos++;
+    if (pos >= text.size() || !IsAsciiLetter(text[pos])) return false;
+    std::wstring name;
+    while (pos < text.size() && (IsAsciiAlnum(text[pos]) || text[pos] == L'-')) {
+        name += (wchar_t)towlower(text[pos]);
+        pos++;
+    }
+    // The tag name must end the line or be followed by whitespace, '>', or '/>'.
+    if (pos < text.size() && text[pos] != L' ' && text[pos] != L'\t' && text[pos] != L'>'
+        && !(text[pos] == L'/' && pos + 1 < text.size() && text[pos + 1] == L'>')) {
+        return false;
+    }
+    return IsParagraphInterruptingTag(name, closing);
+}
+
 bool TryParseHtmlBlock(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks)
 {
     const std::wstring& text = lines[i].text;
@@ -465,7 +519,7 @@ bool StartsOtherBlock(const std::wstring& line)
     Marker marker;
     std::wstring quote;
     return FenceMarker(line, fence) || HeadingLevel(line) > 0 || IsThematicBreak(line)
-        || QuoteContent(line, quote) || ListMarker(line, marker);
+        || QuoteContent(line, quote) || ListMarker(line, marker) || StartsHtmlBlock(line);
 }
 
 void ParseParagraph(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks)

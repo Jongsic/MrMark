@@ -209,6 +209,25 @@ static void TestParser()
         CHECK(blocks[1].type == md::BlockType::Table);
         CHECK(blocks[1].header.size() == 2 && blocks[1].rows.size() == 1);
     }
+    { // a block-level HTML tag interrupts a paragraph (no blank line before it)
+        auto blocks = md::Parse(L"paragraph text\n<div>HTML content</div>");
+        CHECK(blocks.size() == 2);
+        CHECK(blocks[0].type == md::BlockType::Paragraph);
+        CHECK(blocks[1].type == md::BlockType::Html);
+        CHECK(blocks[1].code == L"<div>HTML content</div>");
+    }
+    { // comments and closing block tags interrupt too
+        auto blocks = md::Parse(L"para\n<!-- note -->");
+        CHECK(blocks.size() == 2 && blocks[1].type == md::BlockType::Html);
+        auto closing = md::Parse(L"para\n</div>");
+        CHECK(closing.size() == 2 && closing[1].type == md::BlockType::Html);
+    }
+    { // an inline (type 7) tag does not interrupt a paragraph
+        auto blocks = md::Parse(L"para with\n<span>inline</span> html");
+        CHECK(blocks.size() == 1 && blocks[0].type == md::BlockType::Paragraph);
+        auto autolink = md::Parse(L"see\n<https://example.com> for more");
+        CHECK(autolink.size() == 1 && autolink[0].type == md::BlockType::Paragraph);
+    }
 
     // Thematic breaks
     for (const wchar_t* source : { L"---", L"***", L"- - -" }) {
