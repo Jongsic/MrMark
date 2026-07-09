@@ -12,6 +12,17 @@ final class MarkdownRendererTests: XCTestCase {
         return rendered.attributes(at: range.location, effectiveRange: nil)
     }
 
+    private func firstAttachment(in string: NSAttributedString) -> NSTextAttachment? {
+        var found: NSTextAttachment?
+        string.enumerateAttribute(.attachment, in: NSRange(location: 0, length: string.length)) { value, _, stop in
+            if let attachment = value as? NSTextAttachment {
+                found = attachment
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
     func testHeadingIsLargerAndBold() throws {
         let rendered = renderer.render("# Title\n\nbody text")
         let headingFont = attributes(of: rendered, containing: "Title")[.font] as? NSFont
@@ -39,7 +50,7 @@ final class MarkdownRendererTests: XCTestCase {
 
         // No gaps between the block's own lines; trailing spacing after the last.
         XCTAssertEqual(try XCTUnwrap(firstStyle).paragraphSpacing, 0)
-        XCTAssertEqual(try XCTUnwrap(lastStyle).paragraphSpacing, 8)
+        XCTAssertEqual(try XCTUnwrap(lastStyle).paragraphSpacing, 28)
 
         // Every code line is marked for the full-width background fragment.
         for needle in ["first", "middle", "last"] {
@@ -48,7 +59,28 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertNil(attributes(of: rendered, containing: "after")[.mrmarkCodeBlock])
     }
 
-    func testTableRendersAsAlignedGridNotRawSource() throws {
+    func testCodeBlockCarriesEdgeLanguageAndCopyMarkers() {
+        let rendered = renderer.render("```swift\nlet a = 1\nlet b = 2\n```\n\nafter")
+
+        let first = attributes(of: rendered, containing: "let a = 1")
+        XCTAssertEqual(first[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.top.rawValue)
+        XCTAssertEqual(first[.mrmarkCodeLanguage] as? String, "swift")
+        XCTAssertEqual(first[.mrmarkCodeCopy] as? String, "let a = 1\nlet b = 2")
+
+        let last = attributes(of: rendered, containing: "let b = 2")
+        XCTAssertEqual(last[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.bottom.rawValue)
+        XCTAssertNil(last[.mrmarkCodeLanguage])
+        XCTAssertNil(last[.mrmarkCodeCopy])
+    }
+
+    func testSingleLineCodeBlockIsBothEdges() {
+        let rendered = renderer.render("```\nonly line\n```")
+        let attrs = attributes(of: rendered, containing: "only line")
+        XCTAssertEqual(attrs[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.both.rawValue)
+        XCTAssertEqual(attrs[.mrmarkCodeCopy] as? String, "only line")
+    }
+
+    func testTableRendersAsScrollableGridAttachment() throws {
         let source = """
         | Name | Value |
         | ---- | ----- |
@@ -57,19 +89,43 @@ final class MarkdownRendererTests: XCTestCase {
         """
         let rendered = renderer.render(source)
 
-        XCTAssertFalse(rendered.string.contains("|"), "raw pipes must not leak into the grid")
-        XCTAssertTrue(rendered.string.contains("Name\tValue"))
-        XCTAssertTrue(rendered.string.contains("one\t1"))
-        XCTAssertTrue(rendered.string.contains("한글\t둘"))
-        XCTAssertTrue(rendered.string.contains("─"), "hairline rule under the header")
+        // The whole table is a single scrollable view attachment; its grid text
+        // lives inside the attachment, not in the outer string.
+        let attachment = try XCTUnwrap(firstAttachment(in: rendered) as? TableAttachment)
+        let grid = attachment.grid
+        XCTAssertFalse(grid.string.contains("|"), "raw pipes must not leak into the grid")
+        XCTAssertTrue(grid.string.contains("Name\tValue"))
+        XCTAssertTrue(grid.string.contains("one\t1"))
+        XCTAssertTrue(grid.string.contains("한글\t둘"))
+        XCTAssertTrue(grid.string.contains("─"), "hairline rule under the header")
+        XCTAssertGreaterThan(attachment.naturalWidth, 0)
+        XCTAssertGreaterThan(attachment.gridHeight, 0)
 
-        let headerFont = attributes(of: rendered, containing: "Name")[.font] as? NSFont
+        let nameRange = (grid.string as NSString).range(of: "Name")
+        let headerFont = grid.attributes(at: nameRange.location, effectiveRange: nil)[.font] as? NSFont
         XCTAssertTrue(headerFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
 
-        let rowStyle = attributes(of: rendered, containing: "one")[.paragraphStyle] as? NSParagraphStyle
+        let oneRange = (grid.string as NSString).range(of: "one")
+        let rowStyle = grid.attributes(at: oneRange.location, effectiveRange: nil)[.paragraphStyle] as? NSParagraphStyle
         XCTAssertEqual(try XCTUnwrap(rowStyle).tabStops.count, 2, "one tab stop per column")
-        // Both columns must clear the widest cell (헤더가 굵은 폰트라도 포함해 측정).
         XCTAssertGreaterThan(try XCTUnwrap(rowStyle).tabStops[0].location, 0)
+    }
+
+    func testFrontmatterRendersAsPropertiesNotHeading() throws {
+        let rendered = renderer.render("---\ntitle: Hi There\ntags: a, b\n---\n\n# Real Heading")
+        XCTAssertTrue(rendered.string.contains("title"))
+        XCTAssertTrue(rendered.string.contains("Hi There"))
+        XCTAssertTrue(rendered.string.contains("Real Heading"))
+
+        // The frontmatter key uses the medium-weight key font (15pt), not the
+        // 21pt bold H2 the broken setext parse used to produce.
+        let keyFont = attributes(of: rendered, containing: "title")[.font] as? NSFont
+        XCTAssertEqual(keyFont?.pointSize, 15)
+        XCTAssertFalse(keyFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? true)
+
+        // The real body heading below the frontmatter still renders large.
+        let headingFont = attributes(of: rendered, containing: "Real Heading")[.font] as? NSFont
+        XCTAssertGreaterThan(try XCTUnwrap(headingFont?.pointSize), 15)
     }
 
     func testSyntaxMarkersAreNotRendered() {
