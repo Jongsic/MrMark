@@ -6,6 +6,38 @@ final class ViewerTextView: NSTextView {
     /// Called with the 1-based source line of the clicked checkbox.
     var onCheckboxClick: ((Int) -> Void)?
 
+    /// Owns the actual NSTextFinder; weak since the view controller owns this
+    /// view. NSTextView doesn't publicly conform to NSTextFinderClient, so
+    /// find actions can't just fall through to a superclass implementation —
+    /// they're forwarded here instead of routing through NSTextView's own
+    /// (disabled) find-bar machinery.
+    weak var findActionTarget: ViewerViewController?
+
+    override func performTextFinderAction(_ sender: Any?) {
+        findActionTarget?.performTextFinderAction(sender)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        // Only find actions are ours to answer — everything else (Cut, Paste,
+        // Select All, …) must keep NSTextView's own validation, or read-only
+        // edit items would show enabled.
+        guard item.action == #selector(NSResponder.performTextFinderAction(_:)),
+              let target = findActionTarget
+        else { return super.validateUserInterfaceItem(item) }
+        return target.validateUserInterfaceItem(item)
+    }
+
+    /// Closes the find bar on Escape instead of falling through to
+    /// NSTextView's own cancel behavior (which would just clear the
+    /// selection) while the bar is open.
+    override func cancelOperation(_ sender: Any?) {
+        guard findActionTarget?.isFindBarVisible == true else {
+            super.cancelOperation(sender)
+            return
+        }
+        findActionTarget?.hideFindInterfaceIfVisible()
+    }
+
     override func mouseDown(with event: NSEvent) {
         if let hit = copyButtonHit(at: event) {
             let pasteboard = NSPasteboard.general

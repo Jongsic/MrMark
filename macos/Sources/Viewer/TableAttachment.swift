@@ -14,6 +14,20 @@ final class TableAttachment: NSTextAttachment {
     let naturalWidth: CGFloat
     let gridHeight: CGFloat
 
+    /// Set by TableAttachmentViewProvider.loadView() once the table has
+    /// scrolled into view and built its own text view; nil (and cleared
+    /// automatically, being weak) whenever that view doesn't exist — before
+    /// first load, or after it's torn down. ViewerTextFinderClient uses this
+    /// to address the table's real content directly instead of degrading to
+    /// this attachment's single placeholder character in the outer view.
+    weak var loadedInnerTextView: TableGridTextView?
+
+    /// A grid-local selection/reveal the find client wants applied once the
+    /// inner view exists — recorded when a match lands in a table that
+    /// hasn't loaded yet, consumed by TableAttachmentViewProvider.loadView().
+    var pendingSelection: NSRange?
+    var pendingReveal: NSRange?
+
     init(grid: NSAttributedString, naturalWidth: CGFloat, gridHeight: CGFloat) {
         self.grid = grid
         self.naturalWidth = naturalWidth
@@ -42,6 +56,37 @@ final class TableAttachment: NSTextAttachment {
     }
 }
 
+/// The wide table's own inner text view. `performTextFinderAction:` is an
+/// NSResponder selector dispatched to whichever responder implements it, and
+/// plain NSTextView doesn't meaningfully implement it for our custom finder —
+/// without this override, clicking into a table and then hitting Cmd-F/G/E
+/// would silently do nothing (a pre-existing defect fixed as a side effect of
+/// this override existing at all). Forwarding up the superview chain to the
+/// outer ViewerTextView routes them to the one real NSTextFinder instead.
+final class TableGridTextView: NSTextView {
+    override func performTextFinderAction(_ sender: Any?) {
+        outerViewerTextView?.performTextFinderAction(sender)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        // Same scoping as ViewerTextView: forward only find actions; edit
+        // items keep NSTextView's own (read-only) validation.
+        guard item.action == #selector(NSResponder.performTextFinderAction(_:)),
+              let outer = outerViewerTextView
+        else { return super.validateUserInterfaceItem(item) }
+        return outer.validateUserInterfaceItem(item)
+    }
+
+    private var outerViewerTextView: ViewerTextView? {
+        var candidate = superview
+        while let view = candidate {
+            if let viewerTextView = view as? ViewerTextView { return viewerTextView }
+            candidate = view.superview
+        }
+        return nil
+    }
+}
+
 /// Builds the inner scroll view lazily on the main thread the moment the table
 /// scrolls into view — the renderer only ever carries the grid data, so large
 /// documents can still render off the main thread.
@@ -56,7 +101,7 @@ private final class TableAttachmentViewProvider: NSTextAttachmentViewProvider {
             return
         }
 
-        let textView = NSTextView()
+        let textView = TableGridTextView()
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
@@ -84,6 +129,22 @@ private final class TableAttachmentViewProvider: NSTextAttachmentViewProvider {
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         view = scrollView
+
+        table.loadedInnerTextView = textView
+        if let pendingSelection = table.pendingSelection {
+            textView.setSelectedRange(pendingSelection)
+            table.pendingSelection = nil
+        }
+        if let pendingReveal = table.pendingReveal {
+            table.pendingReveal = nil
+            // The scroll view's geometry isn't finalized until the text
+            // layout system positions this attachment's view (right after
+            // loadView returns), so scrolling synchronously here would
+            // measure against a stale/zero size.
+            DispatchQueue.main.async { [weak textView] in
+                textView?.scrollRangeToVisible(pendingReveal)
+            }
+        }
     }
 
     override func attachmentBounds(
