@@ -81,6 +81,25 @@ final class MarkdownDocumentTests: XCTestCase {
         XCTAssertEqual(MarkdownDocument.togglingCheckboxMarker(in: "no checkbox here"), "no checkbox here")
     }
 
+    func testViewerCheckboxLineTogglesTheClickedLineWithFrontmatter() throws {
+        // Regression: the renderer parses the body with frontmatter peeled off,
+        // so its line numbers used to be short by the peeled lines — a click
+        // could no-op or, worse, edit a frontmatter line that happens to
+        // contain a checkbox-looking "[x]".
+        let source = "---\nhint: \"a: b [x]\"\n---\n\n- [ ] first\n- [x] second\n"
+        let document = MarkdownDocument()
+        try document.read(from: Data(source.utf8), ofType: markdownType)
+
+        let rendered = MarkdownRenderer(baseURL: nil).render(document.text)
+        let checkboxIndex = (rendered.string as NSString).range(of: "☐").location
+        let line = try XCTUnwrap(
+            rendered.attribute(.mrmarkCheckboxLine, at: checkboxIndex, effectiveRange: nil) as? Int
+        )
+
+        document.toggleCheckbox(atSourceLine: line)
+        XCTAssertEqual(document.text, "---\nhint: \"a: b [x]\"\n---\n\n- [x] first\n- [x] second\n")
+    }
+
     func testToggleCheckboxAtSourceLineUpdatesTextAndDirtiesDocument() throws {
         let source = "# List\n\n- [ ] first\n- [x] second\n"
         let document = MarkdownDocument()

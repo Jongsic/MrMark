@@ -7,6 +7,15 @@ extension NSAttributedString.Key {
     static let mrmarkCodeBlock = NSAttributedString.Key("mrmark.codeBlock")
     /// On a task-list checkbox glyph: the 1-based source line it toggles.
     static let mrmarkCheckboxLine = NSAttributedString.Key("mrmark.checkboxLine")
+    /// On a fenced code block's first/last line: which rounded edge to draw
+    /// (a `CodeBlockEdge` raw value). Absent on interior lines.
+    static let mrmarkCodeBlockEdge = NSAttributedString.Key("mrmark.codeBlockEdge")
+    /// On a fenced code block's first line: the fence info string (language).
+    static let mrmarkCodeLanguage = NSAttributedString.Key("mrmark.codeLanguage")
+    /// On a fenced code block's first line: marks the copy button. The button
+    /// copies the enclosing `.mrmarkCodeBlock` run out of the text storage, so
+    /// the code text isn't stored a second time here.
+    static let mrmarkCodeCopy = NSAttributedString.Key("mrmark.codeCopy")
 }
 
 /// Deepest block nesting we let reach swift-markdown. Its parser recurses once
@@ -91,6 +100,12 @@ final class MarkdownRenderer {
     private static let maxNestingDepth = 80
     private var nestingDepth = 0
 
+    // When frontmatter is peeled off, the parser sees only the body, so parsed
+    // line numbers are short by the peeled lines. Checkbox toggling edits the
+    // *original* text by line (MarkdownDocument.toggleCheckbox), so the offset
+    // is added back wherever a source line is stored on the rendered output.
+    private var checkboxLineOffset = 0
+
     init(baseURL: URL? = nil, scale: CGFloat = 1) {
         self.baseURL = baseURL
         self.scale = scale
@@ -112,9 +127,24 @@ final class MarkdownRenderer {
         if markdownNestingExceedsLimit(source) {
             return NSAttributedString(string: source, attributes: bodyAttributes)
         }
-        let document = Document(parsing: source)
         let result = NSMutableAttributedString()
         var first = true
+
+        // YAML frontmatter isn't Markdown. Peel it off and show it as a compact
+        // properties block, then parse only the body — otherwise cmark renders
+        // the fences as a thematic break plus a setext heading.
+        var body = source
+        checkboxLineOffset = 0
+        if let frontmatter = extractFrontmatter(source) {
+            body = frontmatter.body
+            checkboxLineOffset = frontmatter.lineOffset
+            if let block = renderFrontmatter(frontmatter) {
+                result.append(block)
+                first = false
+            }
+        }
+
+        let document = Document(parsing: body)
         for block in document.children {
             if !first {
                 result.append(NSAttributedString(string: "\n", attributes: [.font: bodyFont]))
@@ -129,13 +159,15 @@ final class MarkdownRenderer {
 
     enum Style {
         static func paragraph(spacingBefore: CGFloat = 0, spacing: CGFloat = 8,
-                              indent: CGFloat = 0, hanging: CGFloat = 0) -> NSParagraphStyle
+                              indent: CGFloat = 0, hanging: CGFloat = 0,
+                              tailIndent: CGFloat = 0) -> NSParagraphStyle
         {
             let style = NSMutableParagraphStyle()
             style.paragraphSpacingBefore = spacingBefore
             style.paragraphSpacing = spacing
             style.firstLineHeadIndent = indent
             style.headIndent = indent + hanging
+            style.tailIndent = tailIndent
             style.lineHeightMultiple = 1.15
             return style
         }
@@ -145,6 +177,59 @@ final class MarkdownRenderer {
 
     private func headingFont(_ level: Int) -> NSFont {
         headingFonts[min(max(level, 1), 6) - 1]
+    }
+
+    // MARK: - Frontmatter
+
+    /// Peeled YAML frontmatter as a compact metadata block: a two-column
+    /// key/value grid closed by a hairline rule, or a verbatim monospace block
+    /// when the frontmatter wasn't a flat map. Returns nil for an empty block.
+    private func renderFrontmatter(_ frontmatter: ParsedFrontmatter) -> NSAttributedString? {
+        if let properties = frontmatter.properties, !properties.isEmpty {
+            return renderProperties(properties)
+        }
+        let raw = frontmatter.rawBlock.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        var attributes = bodyAttributes
+        attributes[.font] = codeFont
+        attributes[.foregroundColor] = NSColor.secondaryLabelColor
+        attributes[.paragraphStyle] = Style.paragraph(spacing: 8)
+        return NSAttributedString(string: raw, attributes: attributes)
+    }
+
+    private func renderProperties(_ properties: [(key: String, value: String)]) -> NSAttributedString {
+        let keyFont = NSFont.systemFont(ofSize: 15 * scale, weight: .medium)
+        var keyAttributes = bodyAttributes
+        keyAttributes[.font] = keyFont
+        keyAttributes[.foregroundColor] = NSColor.secondaryLabelColor
+
+        let gap = 16 * scale
+        let keyWidth = properties.reduce(CGFloat(0)) { widest, property in
+            max(widest, ceil((property.key as NSString).size(withAttributes: [.font: keyFont]).width))
+        }
+
+        let rowStyle = NSMutableParagraphStyle()
+        rowStyle.tabStops = [NSTextTab(textAlignment: .left, location: keyWidth + gap)]
+        rowStyle.headIndent = keyWidth + gap // wrapped values stay under the value column
+        rowStyle.paragraphSpacing = 4
+        rowStyle.lineHeightMultiple = 1.15
+
+        let rows = NSMutableAttributedString()
+        var first = true
+        for property in properties {
+            if !first { rows.append(NSAttributedString(string: "\n", attributes: bodyAttributes)) }
+            first = false
+            rows.append(NSAttributedString(string: property.key, attributes: keyAttributes))
+            rows.append(NSAttributedString(string: "\t", attributes: bodyAttributes))
+            rows.append(NSAttributedString(string: property.value, attributes: bodyAttributes))
+        }
+        rows.addAttribute(.paragraphStyle, value: rowStyle, range: NSRange(location: 0, length: rows.length))
+
+        var ruleAttributes = bodyAttributes
+        ruleAttributes[.foregroundColor] = NSColor.separatorColor
+        ruleAttributes[.paragraphStyle] = Style.paragraph(spacingBefore: 2, spacing: 8)
+        rows.append(NSAttributedString(string: "\n" + String(repeating: "─", count: 24), attributes: ruleAttributes))
+        return rows
     }
 
     // MARK: - Blocks
@@ -168,23 +253,63 @@ final class MarkdownRenderer {
             return renderChildren(of: paragraph, attributes: attributes)
 
         case let codeBlock as CodeBlock:
+            // Text is inset from the box the layout fragment draws: `indent`/
+            // `tail` give the left/right padding, and the first/last lines carry
+            // the vertical breathing room the fragment extends the box over.
+            let indent = CGFloat(depth) * 24 + 16
+            let tail: CGFloat = -16
             var attributes = bodyAttributes
             attributes[.font] = codeFont
-            // The full-width block background is drawn by CodeBlockLayoutFragment.
             attributes[.mrmarkCodeBlock] = true
-            let indent = CGFloat(depth) * 24 + 12
-            // Inner lines are one visual block — no spacing between them; the
-            // last line carries the block's trailing spacing.
-            attributes[.paragraphStyle] = Style.paragraph(spacing: 0, indent: indent)
+            attributes[.paragraphStyle] = Style.paragraph(spacing: 0, indent: indent, tailIndent: tail)
             let code = codeBlock.code.hasSuffix("\n") ? String(codeBlock.code.dropLast()) : codeBlock.code
             let block = NSMutableAttributedString(string: code, attributes: attributes)
-            let lastNewline = (code as NSString).range(of: "\n", options: .backwards)
+
+            let nsCode = code as NSString
+            let firstLineEnd = nsCode.range(of: "\n").location
+            let singleLine = firstLineEnd == NSNotFound
+            let firstLineLength = singleLine ? block.length : firstLineEnd
+            let lastNewline = nsCode.range(of: "\n", options: .backwards)
             let lastLineStart = lastNewline.location == NSNotFound ? 0 : lastNewline.location + 1
+            let firstRange = NSRange(location: 0, length: firstLineLength)
+            let lastRange = NSRange(location: lastLineStart, length: block.length - lastLineStart)
+
+            // The first line leaves room above for the box's top padding; the
+            // last line leaves room below plus the block's trailing gap.
             block.addAttribute(
                 .paragraphStyle,
-                value: Style.paragraph(spacing: 8, indent: indent),
-                range: NSRange(location: lastLineStart, length: block.length - lastLineStart)
+                value: Style.paragraph(
+                    spacingBefore: 26,
+                    spacing: singleLine ? 28 : 0,
+                    indent: indent,
+                    tailIndent: tail
+                ),
+                range: firstRange
             )
+            if !singleLine {
+                block.addAttribute(
+                    .paragraphStyle,
+                    value: Style.paragraph(spacing: 28, indent: indent, tailIndent: tail),
+                    range: lastRange
+                )
+            }
+
+            // The first line carries the rounded top edge, the language badge,
+            // and the copy-button marker; the last line carries the rounded
+            // bottom edge (drawn by the layout fragment). A single-line block
+            // is both edges at once.
+            block.addAttribute(
+                .mrmarkCodeBlockEdge,
+                value: (singleLine ? CodeBlockEdge.both : .top).rawValue,
+                range: firstRange
+            )
+            block.addAttribute(.mrmarkCodeCopy, value: true, range: firstRange)
+            if let language = codeBlock.language, !language.isEmpty {
+                block.addAttribute(.mrmarkCodeLanguage, value: language, range: firstRange)
+            }
+            if !singleLine {
+                block.addAttribute(.mrmarkCodeBlockEdge, value: CodeBlockEdge.bottom.rawValue, range: lastRange)
+            }
             return block
 
         case let quote as BlockQuote:
@@ -254,7 +379,7 @@ final class MarkdownRenderer {
                 prefixAttributes[.foregroundColor] = NSColor.secondaryLabelColor
             }
             if item.checkbox != nil, let sourceLine = item.range?.lowerBound.line {
-                prefixAttributes[.mrmarkCheckboxLine] = sourceLine
+                prefixAttributes[.mrmarkCheckboxLine] = sourceLine + checkboxLineOffset
             }
 
             let line = NSMutableAttributedString(string: prefix, attributes: prefixAttributes)
@@ -362,6 +487,7 @@ final class MarkdownRenderer {
             result.append(NSAttributedString(string: "\n"))
             result.append(gridRow(cells))
         }
+
         return result
     }
 

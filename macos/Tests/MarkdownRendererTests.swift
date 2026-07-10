@@ -39,13 +39,50 @@ final class MarkdownRendererTests: XCTestCase {
 
         // No gaps between the block's own lines; trailing spacing after the last.
         XCTAssertEqual(try XCTUnwrap(firstStyle).paragraphSpacing, 0)
-        XCTAssertEqual(try XCTUnwrap(lastStyle).paragraphSpacing, 8)
+        XCTAssertEqual(try XCTUnwrap(lastStyle).paragraphSpacing, 28)
 
         // Every code line is marked for the full-width background fragment.
         for needle in ["first", "middle", "last"] {
             XCTAssertNotNil(attributes(of: rendered, containing: needle)[.mrmarkCodeBlock], needle)
         }
         XCTAssertNil(attributes(of: rendered, containing: "after")[.mrmarkCodeBlock])
+    }
+
+    func testCodeBlockCarriesEdgeLanguageAndCopyMarkers() {
+        let rendered = renderer.render("```swift\nlet a = 1\nlet b = 2\n```\n\nafter")
+
+        let first = attributes(of: rendered, containing: "let a = 1")
+        XCTAssertEqual(first[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.top.rawValue)
+        XCTAssertEqual(first[.mrmarkCodeLanguage] as? String, "swift")
+        XCTAssertNotNil(first[.mrmarkCodeCopy])
+
+        let last = attributes(of: rendered, containing: "let b = 2")
+        XCTAssertEqual(last[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.bottom.rawValue)
+        XCTAssertNil(last[.mrmarkCodeLanguage])
+        XCTAssertNil(last[.mrmarkCodeCopy])
+    }
+
+    func testSingleLineCodeBlockIsBothEdges() {
+        let rendered = renderer.render("```\nonly line\n```")
+        let attrs = attributes(of: rendered, containing: "only line")
+        XCTAssertEqual(attrs[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.both.rawValue)
+        XCTAssertNotNil(attrs[.mrmarkCodeCopy])
+    }
+
+    func testCopyDerivesCodeFromStorageRun() {
+        let rendered = renderer.render("```\nfirst block\ncode line\n```\n\n```\nsecond block\n```\n\nafter")
+        let string = rendered.string as NSString
+        XCTAssertEqual(
+            ViewerTextView.codeBlockText(in: rendered, at: string.range(of: "first").location),
+            "first block\ncode line"
+        )
+        // The newline joining the two blocks carries no code attribute, so the
+        // runs stay separate.
+        XCTAssertEqual(
+            ViewerTextView.codeBlockText(in: rendered, at: string.range(of: "second").location),
+            "second block"
+        )
+        XCTAssertNil(ViewerTextView.codeBlockText(in: rendered, at: string.range(of: "after").location))
     }
 
     func testTableRendersAsAlignedGridNotRawSource() throws {
@@ -70,6 +107,31 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(rowStyle).tabStops.count, 2, "one tab stop per column")
         // Both columns must clear the widest cell (헤더가 굵은 폰트라도 포함해 측정).
         XCTAssertGreaterThan(try XCTUnwrap(rowStyle).tabStops[0].location, 0)
+    }
+
+    func testCheckboxLinesAccountForFrontmatter() {
+        let rendered = renderer.render("---\ntitle: x\n---\n\n- [ ] first\n- [x] second")
+        // Lines are 1-based in the *original* document — toggling edits the
+        // original text, and the parser only ever saw the peeled body.
+        XCTAssertEqual(attributes(of: rendered, containing: "☐")[.mrmarkCheckboxLine] as? Int, 5)
+        XCTAssertEqual(attributes(of: rendered, containing: "☑")[.mrmarkCheckboxLine] as? Int, 6)
+    }
+
+    func testFrontmatterRendersAsPropertiesNotHeading() throws {
+        let rendered = renderer.render("---\ntitle: Hi There\ntags: a, b\n---\n\n# Real Heading")
+        XCTAssertTrue(rendered.string.contains("title"))
+        XCTAssertTrue(rendered.string.contains("Hi There"))
+        XCTAssertTrue(rendered.string.contains("Real Heading"))
+
+        // The frontmatter key uses the medium-weight key font (15pt), not the
+        // 21pt bold H2 the broken setext parse used to produce.
+        let keyFont = attributes(of: rendered, containing: "title")[.font] as? NSFont
+        XCTAssertEqual(keyFont?.pointSize, 15)
+        XCTAssertFalse(keyFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? true)
+
+        // The real body heading below the frontmatter still renders large.
+        let headingFont = attributes(of: rendered, containing: "Real Heading")[.font] as? NSFont
+        XCTAssertGreaterThan(try XCTUnwrap(headingFont?.pointSize), 15)
     }
 
     func testSyntaxMarkersAreNotRendered() {
