@@ -27,12 +27,6 @@ enum CodeBlockMetrics {
     static let badgeInset: CGFloat = 6
     static let buttonSize: CGFloat = 15
 
-    /// The box's right edge in container coordinates: the text column ends one
-    /// line-fragment padding in from the container's right.
-    static func boxMaxX(containerWidth: CGFloat, lineFragmentPadding: CGFloat) -> CGFloat {
-        max(0, containerWidth - lineFragmentPadding)
-    }
-
     /// The copy button's rect in the same space as `box`.
     static func copyButtonRect(box: CGRect) -> CGRect {
         CGRect(x: box.maxX - badgeInset - buttonSize, y: box.minY + badgeInset, width: buttonSize, height: buttonSize)
