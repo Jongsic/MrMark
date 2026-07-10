@@ -6,7 +6,7 @@
 ; MrMark-Setup-<version>.exe.
 
 #ifndef AppVersion
-  #define AppVersion "1.2.2"
+  #define AppVersion "1.3.0"
 #endif
 
 [Setup]
