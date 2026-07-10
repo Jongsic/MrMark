@@ -71,6 +71,49 @@ final class MarkdownDocument: NSDocument {
         text = newText
     }
 
+    // MARK: - Printing
+
+    /// Prints the rendered document — what the viewer shows, not the source.
+    /// The print view is TextKit 1: NSTextView's page-by-page printing is
+    /// built on it, and the viewer's TextKit 2 code-block fragments don't
+    /// draw in that path, so a glyph-level background stands in for them.
+    override func printOperation(
+        withSettings printSettings: [NSPrintInfo.AttributeKey: Any]
+    ) throws -> NSPrintOperation {
+        let printInfo = NSPrintInfo(dictionary: printSettings)
+        printInfo.horizontalPagination = .fit
+        printInfo.verticalPagination = .automatic
+        printInfo.isHorizontallyCentered = false
+        printInfo.isVerticallyCentered = false
+
+        let renderer = MarkdownRenderer(baseURL: fileURL?.deletingLastPathComponent())
+        let content = NSMutableAttributedString(attributedString: renderer.render(text))
+        content.enumerateAttribute(
+            .mrmarkCodeBlock,
+            in: NSRange(location: 0, length: content.length)
+        ) { value, range, _ in
+            guard value != nil else { return }
+            content.addAttribute(.backgroundColor, value: NSColor.quaternarySystemFill, range: range)
+        }
+
+        let pageBody = NSSize(
+            width: printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin,
+            height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin
+        )
+        let printView = NSTextView(usingTextLayoutManager: false)
+        printView.frame = NSRect(origin: .zero, size: pageBody)
+        // Semantic colors must resolve for paper, not the app's appearance.
+        printView.appearance = NSAppearance(named: .aqua)
+        printView.drawsBackground = false
+        printView.isVerticallyResizable = true
+        printView.isHorizontallyResizable = false
+        printView.textContainer?.widthTracksTextView = true
+        printView.textContainer?.size = NSSize(width: pageBody.width, height: .greatestFiniteMagnitude)
+        printView.textStorage?.setAttributedString(content)
+
+        return NSPrintOperation(view: printView, printInfo: printInfo)
+    }
+
     // MARK: - Checkbox toggling (viewer)
 
     /// Flips `- [ ]` ↔ `- [x]` on the given 1-based source line, with undo.

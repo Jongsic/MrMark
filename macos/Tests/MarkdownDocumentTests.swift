@@ -29,6 +29,23 @@ final class MarkdownDocumentTests: XCTestCase {
         }
     }
 
+    func testPrintOperationPrintsRenderedContentNotSource() throws {
+        let document = MarkdownDocument()
+        try document.read(from: Data("# Title\n\nBody text\n".utf8), ofType: markdownType)
+
+        let operation = try document.printOperation(withSettings: [:])
+
+        let printView = try XCTUnwrap(operation.view as? NSTextView)
+        let printed = try XCTUnwrap(printView.textStorage)
+        // Rendered output: heading markers are gone, the text itself remains.
+        XCTAssertFalse(printed.string.contains("#"))
+        XCTAssertTrue(printed.string.contains("Title"))
+        XCTAssertTrue(printed.string.contains("Body text"))
+        // Content must repaginate to the chosen paper, never clip.
+        XCTAssertEqual(operation.printInfo.horizontalPagination, .fit)
+        XCTAssertEqual(operation.printInfo.verticalPagination, .automatic)
+    }
+
     func testManualSavePolicyAutosaveIsOff() {
         // Policy: saving is manual (⌘S / toolbar). autosavesInPlace == false
         // gives the classic OS behavior — closing a dirty document prompts
