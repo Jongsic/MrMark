@@ -1,3 +1,14 @@
+---
+title: MrMark Feature Tour
+tags:
+- markdown
+- viewer
+- qa
+status: living document
+updated: 2026-07-10
+note: "values with a colon: and a [x] checkbox-looking bit survive as-is"
+---
+
 # MrMark Feature Tour
 
 A single document that exercises everything MrMark renders. Open it in the
@@ -105,6 +116,16 @@ cell wrapping are intentionally out of scope:
 | Korean   | 안녕하세요     | LTR       |
 | Arabic   | مرحبا        | RTL       |
 | Japanese | こんにちは     | LTR       |
+
+A table wider than the window (many columns, long cells) clips on the
+right — rows never wrap (that would wreck the grid), and full table
+layout is out of scope by design; zoom out to see more columns:
+
+| Release | Date       | macOS Minimum | Highlights                                  | Viewer Changes                            | Editor Changes                     | Known Issues                        | Notes                       |
+| ------- | ---------- | ------------- | ------------------------------------------- | ----------------------------------------- | ---------------------------------- | ----------------------------------- | --------------------------- |
+| 1.0.0   | 2026-03-02 | 14.0          | First public release, viewer + lazy editor  | GFM rendering, checkboxes, 다크 모드 지원 | Formatting toolbar, source hi-lite | About dialog shows wrong version    | DMG notarized               |
+| 1.2.0   | 2026-05-18 | 14.0          | CommonMark corpus tests, hardened links     | Safer link/image handling, 属性ブロック   | Checklist toggle, smart lists      | Wide tables wrap and garble         | 성능 예산 <200ms 콜드 런치  |
+| 1.2.2   | 2026-07-08 | 14.0          | Windows viewer paragraph interruption fixes | Block-level HTML interrupts paragraphs    | —                                  | Frontmatter renders as setext head  | 이 표가 스크롤되는지 확인용 |
 
 ## Thematic breaks
 
