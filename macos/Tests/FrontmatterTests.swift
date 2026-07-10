@@ -47,6 +47,27 @@ final class FrontmatterTests: XCTestCase {
         XCTAssertNil(extractFrontmatter("---\n\n# Title\n\nSome prose between two rules.\n\n---\nmore text"))
     }
 
+    func testProseParagraphWithColonIsNotFrontmatter() {
+        // "Note: …" prose between two rules contains a colon on every non-empty
+        // line; the blank lines around the paragraph are what give it away.
+        XCTAssertNil(extractFrontmatter("---\n\nNote: this document matters.\n\n---\n\n# Heading\n"))
+    }
+
+    func testLeadingBulletListIsNotFrontmatter() {
+        // A frontmatter mapping opens with `key:` — a `- ` item first means a
+        // Markdown list between two rules.
+        XCTAssertNil(extractFrontmatter("---\n- first\n- second\n---\n\nbody"))
+    }
+
+    func testBlankLineInsideBlockDisqualifies() {
+        XCTAssertNil(extractFrontmatter("---\ntitle: x\n\nauthor: y\n---\nbody"))
+    }
+
+    func testEmptyBlockIsNotFrontmatter() {
+        // `---` directly followed by `---` reads as two thematic breaks.
+        XCTAssertNil(extractFrontmatter("---\n---\nbody"))
+    }
+
     func testLineOffsetCountsPeeledLines() throws {
         let parsed = try XCTUnwrap(extractFrontmatter("---\nname: foo\ndesc: bar\n---\nbody"))
         XCTAssertEqual(parsed.lineOffset, 4, "opening fence + two block lines + closing fence")

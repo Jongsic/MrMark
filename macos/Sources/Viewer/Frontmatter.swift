@@ -51,13 +51,21 @@ func extractFrontmatter(_ source: String) -> ParsedFrontmatter? {
     )
 }
 
-/// True when every non-empty line has a YAML-ish shape: an indented
-/// continuation, a `- ` sequence item, or a line with a `:`. Markdown prose or
-/// headings between two thematic breaks fail this and stay Markdown. (`#`
-/// comments are deliberately not counted — a Markdown heading looks the same.)
+/// True when the block has the shape of a frontmatter mapping: it opens with a
+/// top-level `key:` line, and every later line is an indented continuation, a
+/// `- ` sequence item, or another `:` line. Blank lines disqualify the block —
+/// real frontmatter rarely contains them, while Markdown between two thematic
+/// breaks almost always does (`Note: some prose.` in its own paragraph). The
+/// opening-line rule keeps a leading bullet list Markdown too; when in doubt
+/// the document stays Markdown. (`#` comments are deliberately not counted —
+/// a Markdown heading looks the same.)
 private func blockLinesLookLikeYAML(_ lines: [String]) -> Bool {
-    lines.allSatisfy { line in
-        if line.isEmpty || line.first == " " || line.first == "\t" { return true }
+    guard let first = lines.first, first.first != " ", first.first != "\t",
+          !first.hasPrefix("- "), first.contains(":")
+    else { return false }
+    return lines.dropFirst().allSatisfy { line in
+        if line.isEmpty { return false }
+        if line.first == " " || line.first == "\t" { return true }
         return line.hasPrefix("- ") || line.contains(":")
     }
 }
