@@ -189,6 +189,11 @@ struct App {
     struct CheckboxHit { LONG cpMin, cpMax; int line; };
     std::vector<CheckboxHit> checkboxes;
 
+    // Viewer: code-block copy glyph positions (cp) -> index into codeTexts.
+    struct CopyHit { LONG cpMin, cpMax; size_t index; };
+    std::vector<CopyHit> copyButtons;
+    std::vector<std::wstring> codeTexts;
+
     // Editor: source mirror for incremental restyling.
     std::vector<std::wstring> lines;
     std::vector<char> codeMap;
@@ -320,6 +325,12 @@ struct Builder {
     const Theme* theme = nullptr;
     std::vector<int> checkboxLines;
     std::vector<std::wstring> images;
+    /// One entry per fenced code block, in document order — what its copy
+    /// glyph puts on the clipboard (indexed like checkboxes, post-stream).
+    std::vector<std::wstring> codeTexts;
+    /// Print builds turn the code-block header (language + copy glyph) off —
+    /// paper gets the code alone, matching the macOS print path.
+    bool codeChrome = true;
     int imageCount = 0;
 
     static int HalfPt(float px) { return (int)(px * 0.75f * 2 + 0.5f); }
@@ -337,7 +348,7 @@ struct Builder {
         out += "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fswiss Segoe UI;}{\\f1\\fmodern ";
         std::wstring family = g_app.monoFamily;
         out += std::string(family.begin(), family.end()); // ASCII family names only
-        out += ";}}{\\colortbl;";
+        out += ";}{\\f2\\fnil Segoe MDL2 Assets;}}{\\colortbl;";
         Color(theme->label);
         Color(theme->secondary);
         Color(theme->link);
@@ -478,9 +489,7 @@ struct Builder {
                 break;
             }
             case md::BlockType::Code:
-                BeginPara(depth * 24 + 12, 0, 0, 8, 13);
-                Run(block.code, 13, false, false, false, true, baseColor, true);
-                out += "\\par\n";
+                CodeBlock(block, depth, baseColor);
                 break;
             case md::BlockType::Quote:
                 Blocks(block.children, depth + 1, true);
@@ -504,6 +513,85 @@ struct Builder {
                 break;
             }
         }
+    }
+
+    /// A fenced code block as a distinct full-width tinted box (the macOS
+    /// viewer's rounded box, minus the rounding RTF can't express): paragraph
+    /// shading (\cbpat) fills the box where the control supports it, with the
+    /// glyph-level highlight kept underneath as the everywhere-fallback. A
+    /// header line inside the box carries the fence language and a copy
+    /// glyph; print builds skip it.
+    void CodeBlock(const md::Block& block, float depth, int baseColor)
+    {
+        char buf[128];
+        float indent = depth * 24 + 12;
+        if (codeChrome) {
+            codeTexts.push_back(block.code);
+            sprintf_s(buf, "\\pard\\li%d\\ri%d\\sb%d\\sa0\\qr\\cbpat%d ", Twips(indent),
+                      Twips(12), Twips(8), ColCodeBg);
+            out += buf;
+            if (!block.lang.empty()) {
+                Run(block.lang + L"  ", 10, false, false, false, true, ColSecondary, true);
+            }
+            // Segoe MDL2 Assets "Copy" (U+E8C8), indexed post-stream for the
+            // click-to-copy hit test.
+            sprintf_s(buf, "{\\f2\\fs%d\\cf%d\\highlight%d \\u%d?}", HalfPt(12), ColSecondary,
+                      ColCodeBg, (int)(short)0xE8C8);
+            out += buf;
+            out += "\\par\n";
+        }
+        sprintf_s(buf, "\\pard\\li%d\\ri%d\\sb0\\sa%d\\sl-%d\\slmult0\\cbpat%d ", Twips(indent),
+                  Twips(12), Twips(8), LinePitchTwips(13), ColCodeBg);
+        out += buf;
+        Run(block.code, 13, false, false, false, true, baseColor, true);
+        out += "\\par\n";
+    }
+
+    /// Peeled YAML frontmatter as a compact metadata block: a two-column
+    /// key/value grid closed by a hairline rule, or a verbatim monospace
+    /// block when the frontmatter wasn't a flat map (the spec mirror of the
+    /// macOS renderFrontmatter).
+    void FrontmatterBlock(const md::Frontmatter& frontmatter)
+    {
+        if (frontmatter.flatMap && !frontmatter.properties.empty()) {
+            HDC dc = GetDC(nullptr);
+            SelectObject(dc, g_app.bodyBoldFont);
+            int keyWidth = 0;
+            for (const auto& property : frontmatter.properties) {
+                SIZE size{};
+                GetTextExtentPoint32W(dc, property.first.c_str(), (int)property.first.size(),
+                                      &size);
+                keyWidth = std::max(keyWidth, (int)(size.cx / g_app.dpi));
+            }
+            ReleaseDC(nullptr, dc);
+
+            // Hanging indent keeps wrapped values under the value column.
+            int column = keyWidth + 16;
+            char buf[128];
+            for (const auto& property : frontmatter.properties) {
+                sprintf_s(buf, "\\pard\\li%d\\fi%d\\tx%d\\sa%d\\sl-%d\\slmult0 ",
+                          Twips((float)column), -Twips((float)column), Twips((float)column),
+                          Twips(4), LinePitchTwips(15));
+                out += buf;
+                Run(property.first, 15, true, false, false, false, ColSecondary, false);
+                out += "\\tab ";
+                Run(property.second, 15, false, false, false, false, ColLabel, false);
+                out += "\\par\n";
+            }
+            BeginPara(0, 0, 2, 8);
+            Run(std::wstring(24, L'─'), 15, false, false, false, false, ColSeparator, false);
+            out += "\\par\n";
+            return;
+        }
+
+        std::wstring raw = frontmatter.rawBlock;
+        size_t begin = raw.find_first_not_of(L" \t\n");
+        size_t end = raw.find_last_not_of(L" \t\n");
+        if (begin == std::wstring::npos) return;
+        raw = raw.substr(begin, end - begin + 1);
+        BeginPara(0, 0, 0, 8, 13);
+        Run(raw, 13, false, false, false, true, ColSecondary, false);
+        out += "\\par\n";
     }
 
     void List(const md::Block& list, float depth, bool secondary)
@@ -620,9 +708,10 @@ struct Builder {
         out += "\\pard\\sa80\\par\n";
     }
 
-    void Build(const std::vector<md::Block>& blocks)
+    void Build(const std::vector<md::Block>& blocks, const md::Frontmatter* frontmatter = nullptr)
     {
         Header();
+        if (frontmatter) FrontmatterBlock(*frontmatter);
         Blocks(blocks, 0, false);
         out += "}";
     }
@@ -746,6 +835,38 @@ static void IndexCheckboxes(const std::vector<int>& lines)
     }
 }
 
+/// Copy glyphs are plain characters (Segoe MDL2 "Copy"); their positions are
+/// indexed after streaming, in document order, one per fenced code block.
+static void IndexCopyButtons(std::vector<std::wstring> codeTexts)
+{
+    g_app.copyButtons.clear();
+    g_app.codeTexts = std::move(codeTexts);
+    wchar_t glyph[] = { 0xE8C8, 0 };
+    LONG from = 0;
+    for (size_t i = 0; i < g_app.codeTexts.size(); i++) {
+        FINDTEXTEXW find{};
+        find.chrg = { from, -1 };
+        find.lpstrText = glyph;
+        LONG pos = (LONG)SendMessageW(g_app.richEdit, EM_FINDTEXTEXW, FR_DOWN, (LPARAM)&find);
+        if (pos < 0) break;
+        g_app.copyButtons.push_back({ pos, pos + 1, i });
+        from = pos + 1;
+    }
+}
+
+static void CopyTextToClipboard(const std::wstring& text)
+{
+    if (!OpenClipboard(g_app.hwnd)) return;
+    EmptyClipboard();
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    if (mem) {
+        memcpy(GlobalLock(mem), text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+        GlobalUnlock(mem);
+        SetClipboardData(CF_UNICODETEXT, mem);
+    }
+    CloseClipboard();
+}
+
 static void UpdateTitle()
 {
     std::wstring title = g_app.doc.DisplayName();
@@ -764,12 +885,18 @@ static void StreamDocument(bool preserveScroll)
         ? (LONG)SendMessageW(g_app.richEdit, EM_GETFIRSTVISIBLELINE, 0, 0)
         : 0;
 
-    auto blocks = md::Parse(g_app.doc.text);
+    // YAML frontmatter isn't Markdown: peel it off and show it as a compact
+    // properties block. Parsing the body with its real first line number
+    // keeps checkbox source lines pointing at the full document's lines.
+    md::Frontmatter frontmatter;
+    bool hasFrontmatter = md::ExtractFrontmatter(g_app.doc.text, frontmatter);
+    auto blocks = hasFrontmatter ? md::Parse(frontmatter.body, frontmatter.lineOffset + 1)
+                                 : md::Parse(g_app.doc.text);
     clockmarks::Mark(L"parse");
 
     rtf::Builder builder;
     builder.theme = &g_app.theme;
-    builder.Build(blocks);
+    builder.Build(blocks, hasFrontmatter ? &frontmatter : nullptr);
     clockmarks::Mark(L"rtf");
 
     g_app.internalChange = true;
@@ -782,6 +909,7 @@ static void StreamDocument(bool preserveScroll)
 
     InsertImages(g_app.richEdit, builder.images);
     IndexCheckboxes(builder.checkboxLines);
+    IndexCopyButtons(builder.codeTexts);
 
     SendMessageW(g_app.richEdit, EM_SETSEL, 0, 0);
     SendMessageW(g_app.richEdit, EM_SETREADONLY, TRUE, 0);
@@ -1522,9 +1650,14 @@ static void PrintInteractive()
     }
 
     Theme light = LightTheme();
+    md::Frontmatter frontmatter;
+    bool hasFrontmatter = md::ExtractFrontmatter(g_app.doc.text, frontmatter);
     rtf::Builder builder;
     builder.theme = &light;
-    builder.Build(md::Parse(g_app.doc.text));
+    builder.codeChrome = false; // paper gets the code alone, no copy glyph
+    builder.Build(hasFrontmatter ? md::Parse(frontmatter.body, frontmatter.lineOffset + 1)
+                                 : md::Parse(g_app.doc.text),
+                  hasFrontmatter ? &frontmatter : nullptr);
     std::pair<const char*, size_t> cookie{ builder.out.data(), builder.out.size() };
     EDITSTREAM stream{ (DWORD_PTR)&cookie, 0, StreamInProc };
     SendMessageW(printEdit, EM_STREAMIN, SF_RTF, (LPARAM)&stream);
@@ -2016,6 +2149,14 @@ static LRESULT CALLBACK RichEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     return 0;
                 }
             }
+            for (const auto& button : g_app.copyButtons) {
+                if (cp >= button.cpMin && cp < button.cpMax) {
+                    if (button.index < g_app.codeTexts.size()) {
+                        CopyTextToClipboard(g_app.codeTexts[button.index]);
+                    }
+                    return 0;
+                }
+            }
         }
         break;
 
@@ -2025,6 +2166,12 @@ static LRESULT CALLBACK RichEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             LONG cp = (LONG)SendMessageW(hwnd, EM_CHARFROMPOS, 0, (LPARAM)&pt);
             for (const auto& box : g_app.checkboxes) {
                 if (cp >= box.cpMin && cp < box.cpMax) {
+                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                    break;
+                }
+            }
+            for (const auto& button : g_app.copyButtons) {
+                if (cp >= button.cpMin && cp < button.cpMax) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
                     break;
                 }

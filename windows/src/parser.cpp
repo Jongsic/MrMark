@@ -928,13 +928,109 @@ std::wstring PlainText(const std::vector<Inline>& inlines)
 
 std::vector<Block> Parse(const std::wstring& source)
 {
+    return Parse(source, 1);
+}
+
+std::vector<Block> Parse(const std::wstring& source, int firstSourceLine)
+{
     auto raw = SplitLines(source);
     std::vector<Line> lines;
     lines.reserve(raw.size());
     for (size_t i = 0; i < raw.size(); i++) {
-        lines.push_back({ std::move(raw[i]), (int)i + 1 });
+        lines.push_back({ std::move(raw[i]), (int)i + firstSourceLine });
     }
     return ParseBlocks(lines, 0);
+}
+
+// MARK: - Frontmatter
+
+/// True when the block has the shape of a frontmatter mapping: it opens with
+/// a top-level `key:` line, and every later line is an indented continuation,
+/// a `- ` sequence item, or another `:` line. Blank lines disqualify the
+/// block — real frontmatter rarely contains them, while Markdown between two
+/// thematic breaks almost always does. (`#` comments are deliberately not
+/// counted — a Markdown heading looks the same.)
+static bool BlockLinesLookLikeYAML(const std::vector<std::wstring>& lines)
+{
+    if (lines.empty()) return false;
+    const std::wstring& first = lines[0];
+    if (first.empty() || first[0] == L' ' || first[0] == L'\t') return false;
+    if (first.rfind(L"- ", 0) == 0) return false;
+    if (first.find(L':') == std::wstring::npos) return false;
+    for (size_t i = 1; i < lines.size(); i++) {
+        const std::wstring& line = lines[i];
+        if (line.empty()) return false;
+        if (line[0] == L' ' || line[0] == L'\t') continue;
+        if (line.rfind(L"- ", 0) == 0) continue;
+        if (line.find(L':') == std::wstring::npos) return false;
+    }
+    return true;
+}
+
+/// Parses `key: value` lines plus the common `key:` + `- item` block-sequence
+/// shape (list items joined with ", "). False on anything that isn't a flat
+/// map — a signal to fall back to verbatim rendering.
+static bool ParseFlatProperties(const std::vector<std::wstring>& lines,
+                                std::vector<std::pair<std::wstring, std::wstring>>& out)
+{
+    size_t i = 0;
+    while (i < lines.size()) {
+        const std::wstring& line = lines[i];
+        i++;
+        if (Trim(line).empty()) continue;
+        // A top-level key must not be indented.
+        if (line[0] == L' ' || line[0] == L'\t') return false;
+        size_t colon = line.find(L':');
+        if (colon == std::wstring::npos) return false;
+        std::wstring key = Trim(line.substr(0, colon));
+        if (key.empty()) return false;
+        std::wstring value = Trim(line.substr(colon + 1));
+
+        // `key:` with no inline value may be followed by `- item` lines.
+        if (value.empty()) {
+            std::wstring items;
+            while (i < lines.size()) {
+                std::wstring candidate = Trim(lines[i]);
+                if (candidate.rfind(L"- ", 0) != 0) break;
+                if (!items.empty()) items += L", ";
+                items += Trim(candidate.substr(2));
+                i++;
+            }
+            value = items;
+        }
+        out.emplace_back(key, value);
+    }
+    return !out.empty();
+}
+
+bool ExtractFrontmatter(const std::wstring& source, Frontmatter& out)
+{
+    if (source.rfind(L"---", 0) != 0) return false;
+    auto lines = SplitLines(source);
+    if (lines.empty() || lines[0] != L"---") return false;
+
+    size_t close = 0;
+    for (size_t i = 1; i < lines.size(); i++) {
+        if (lines[i] == L"---" || lines[i] == L"...") { close = i; break; }
+    }
+    if (close == 0) return false;
+
+    std::vector<std::wstring> blockLines(lines.begin() + 1, lines.begin() + close);
+    if (!BlockLinesLookLikeYAML(blockLines)) return false;
+
+    out.flatMap = ParseFlatProperties(blockLines, out.properties);
+    out.rawBlock.clear();
+    for (size_t i = 0; i < blockLines.size(); i++) {
+        if (i > 0) out.rawBlock += L'\n';
+        out.rawBlock += blockLines[i];
+    }
+    out.body.clear();
+    for (size_t i = close + 1; i < lines.size(); i++) {
+        if (i > close + 1) out.body += L'\n';
+        out.body += lines[i];
+    }
+    out.lineOffset = (int)close + 1;
+    return true;
 }
 
 } // namespace md

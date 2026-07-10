@@ -4,6 +4,7 @@
 // mirror of the macOS renderer). Input uses "\n" line endings.
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace md {
@@ -62,8 +63,38 @@ struct Block {
 };
 
 std::vector<Block> Parse(const std::wstring& source);
+/// `firstSourceLine` is what line 1 of `source` is in the original document —
+/// used when a leading frontmatter block was peeled off, so checkbox source
+/// lines keep pointing at the right lines of the full text.
+std::vector<Block> Parse(const std::wstring& source, int firstSourceLine);
 std::vector<Inline> ParseInlines(const std::wstring& text);
 std::wstring PlainText(const std::vector<Inline>& inlines);
 
+/// A leading YAML frontmatter block peeled off the source before Markdown
+/// parsing (the spec mirror of the macOS Frontmatter.swift): the viewer shows
+/// it as a compact key/value properties block instead of rendering the fences
+/// as thematic breaks around stray prose.
+struct Frontmatter {
+    /// Ordered key/value pairs; `flatMap` is false when the block isn't a
+    /// flat key/value map (nested maps, unexpected indentation) — callers
+    /// show `rawBlock` verbatim in that case.
+    std::vector<std::pair<std::wstring, std::wstring>> properties;
+    bool flatMap = false;
+    /// The text between the fences — used for the verbatim fallback.
+    std::wstring rawBlock;
+    /// The Markdown that follows the closing fence.
+    std::wstring body;
+    /// How many source lines were peeled off ahead of `body` (both fences
+    /// plus the block).
+    int lineOffset = 0;
+};
+
+/// Detects and peels a leading YAML frontmatter block. False (leaving the
+/// source untouched) unless it opens on the very first line with `---`, a
+/// later `---`/`...` closes it, and the lines between have the shape of a
+/// frontmatter mapping: a top-level `key:` line first, then indented
+/// continuations, `- ` items, or more `:` lines — no blank lines. When in
+/// doubt the document stays Markdown. Input is newline-normalized.
+bool ExtractFrontmatter(const std::wstring& source, Frontmatter& out);
 
 } // namespace md

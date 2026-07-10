@@ -498,6 +498,91 @@ static std::wstring WidenUtf8(const std::string& s)
     return out;
 }
 
+// MARK: - Frontmatter (spec mirror of macOS FrontmatterTests)
+
+static void TestFrontmatter()
+{
+    // Flat properties extract in order; the body follows the closing fence.
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\nname: foo\ndesc: bar baz\n---\n\n# Body", fm));
+        CHECK(fm.flatMap);
+        CHECK(fm.properties.size() == 2);
+        CHECK(fm.properties[0].first == L"name" && fm.properties[0].second == L"foo");
+        CHECK(fm.properties[1].first == L"desc" && fm.properties[1].second == L"bar baz");
+        CHECK(fm.body.find(L"# Body") != std::wstring::npos);
+        CHECK(fm.body.find(L"name") == std::wstring::npos);
+        CHECK(fm.lineOffset == 4);
+    }
+    // `key:` + block sequence items join with ", " (indented too).
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\ntriggers:\n- alpha\n- beta\nname: x\n---\nbody", fm));
+        CHECK(fm.properties[0].first == L"triggers" && fm.properties[0].second == L"alpha, beta");
+        CHECK(fm.properties[1].first == L"name");
+    }
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\ntriggers:\n  - alpha\n  - beta\n---\nbody", fm));
+        CHECK(fm.properties[0].second == L"alpha, beta");
+    }
+    // A value keeps everything after the first colon.
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\nhint: \"a: b [x]\"\n---\nbody", fm));
+        CHECK(fm.properties[0].second == L"\"a: b [x]\"");
+    }
+    // A nested map isn't a flat map: verbatim fallback, body still peeled.
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\nmeta:\n  nested: value\n---\nbody", fm));
+        CHECK(!fm.flatMap);
+        CHECK(fm.rawBlock.find(L"nested: value") != std::wstring::npos);
+        CHECK(fm.body == L"body");
+    }
+    // `...` also closes; a fence on the last line leaves an empty body.
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\nname: foo\n...\nbody", fm));
+        CHECK(fm.body == L"body");
+    }
+    {
+        md::Frontmatter fm;
+        CHECK(md::ExtractFrontmatter(L"---\nname: foo\n---", fm));
+        CHECK(fm.body.empty());
+        CHECK(fm.properties[0].second == L"foo");
+    }
+    // Not frontmatter: no close, not at line 1, Markdown between two rules,
+    // prose with a colon (blank lines give it away), a leading bullet list,
+    // a blank line inside the block, an empty block.
+    md::Frontmatter fm;
+    CHECK(!md::ExtractFrontmatter(L"---\nname: foo\n\nbody without closing fence", fm));
+    CHECK(!md::ExtractFrontmatter(L"intro\n---\nname: foo\n---\nbody", fm));
+    CHECK(!md::ExtractFrontmatter(L"---\n\n# Title\n\nProse between rules.\n\n---\nmore", fm));
+    CHECK(!md::ExtractFrontmatter(L"---\n\nNote: this document matters.\n\n---\n\n# H\n", fm));
+    CHECK(!md::ExtractFrontmatter(L"---\n- first\n- second\n---\n\nbody", fm));
+    CHECK(!md::ExtractFrontmatter(L"---\ntitle: x\n\nauthor: y\n---\nbody", fm));
+    CHECK(!md::ExtractFrontmatter(L"---\n---\nbody", fm));
+
+    // Parsing the peeled body with its real first line number keeps checkbox
+    // source lines pointing at the full document (what a click toggles).
+    {
+        std::wstring source = L"---\nhint: \"a: b [x]\"\n---\n\n- [ ] first\n- [x] second\n";
+        md::Frontmatter parsed;
+        CHECK(md::ExtractFrontmatter(source, parsed));
+        auto blocks = md::Parse(parsed.body, parsed.lineOffset + 1);
+        CHECK(blocks.size() == 1 && blocks[0].type == md::BlockType::List);
+        CHECK(blocks[0].items[0].sourceLine == 5);
+        CHECK(blocks[0].items[1].sourceLine == 6);
+
+        md::Document doc;
+        doc.text = source;
+        CHECK(doc.ToggleCheckbox(blocks[0].items[0].sourceLine));
+        CHECK(doc.text.find(L"- [x] first") != std::wstring::npos);
+        CHECK(doc.text.find(L"hint: \"a: b [x]\"") != std::wstring::npos);
+    }
+}
+
 // The parser is a GFM subset, so we don't diff against the spec's HTML; this is
 // a stability suite — every CommonMark example (and the pathological nesting
 // cases appended by the generator) must parse without crashing or hanging.
@@ -524,6 +609,7 @@ int wmain()
     TestFormatting();
     TestDocument();
     TestStyler();
+    TestFrontmatter();
     TestSpecCorpus();
     wprintf(L"%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
