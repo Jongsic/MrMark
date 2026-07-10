@@ -11,7 +11,7 @@ final class ViewerTextView: NSTextView {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(hit.code, forType: .string)
-            showCopiedFeedback(nextTo: hit.buttonRect)
+            showCopiedFeedback(nextTo: hit.buttonRect, covering: hit.language)
             return
         }
         if let line = checkboxSourceLine(at: event) {
@@ -21,12 +21,13 @@ final class ViewerTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
-    /// The code text and button rect (view coordinates) when the click landed
-    /// on a code block's copy button. The button rect is rebuilt with the same
-    /// box math CodeBlockLayoutFragment draws with, so hit-testing agrees with
-    /// what's on screen — a click anywhere else in the block falls through to
-    /// text selection instead of silently replacing the pasteboard.
-    private func copyButtonHit(at event: NSEvent) -> (code: String, buttonRect: NSRect)? {
+    /// The code text, button rect (view coordinates), and language badge text
+    /// when the click landed on a code block's copy button. The button rect is
+    /// rebuilt with the same box math CodeBlockLayoutFragment draws with, so
+    /// hit-testing agrees with what's on screen — a click anywhere else in the
+    /// block falls through to text selection instead of silently replacing the
+    /// pasteboard.
+    private func copyButtonHit(at event: NSEvent) -> (code: String, buttonRect: NSRect, language: String?)? {
         guard let layoutManager = textLayoutManager,
               let container = textContainer,
               let storage = textStorage, storage.length > 0 else { return nil }
@@ -67,7 +68,11 @@ final class ViewerTextView: NSTextView {
         guard let elementStart = fragment.textElement?.elementRange?.location else { return nil }
         let index = layoutManager.offset(from: layoutManager.documentRange.location, to: elementStart)
         guard let code = Self.codeBlockText(in: storage, at: index) else { return nil }
-        return (code, button.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y))
+        return (
+            code,
+            button.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y),
+            attributes[.mrmarkCodeLanguage] as? String
+        )
     }
 
     /// The full text of the fenced code block containing `index`: the longest
@@ -85,17 +90,41 @@ final class ViewerTextView: NSTextView {
         return storage.attributedSubstring(from: range).string
     }
 
-    /// Brief "Copied" confirmation that fades out next to the button. Created
-    /// only on click, so the viewer fast path allocates nothing for it.
-    private func showCopiedFeedback(nextTo buttonRect: NSRect) {
+    private static let copiedFeedbackID = NSUserInterfaceItemIdentifier("mrmark.copiedFeedback")
+
+    /// Brief "Copied" confirmation that fades out in place of the language
+    /// badge. Opaque and sized to span the badge — the layout fragment keeps
+    /// drawing the badge underneath, so a transparent label would garble the
+    /// two on top of each other. Created only on click, so the viewer fast
+    /// path allocates nothing for it.
+    private func showCopiedFeedback(nextTo buttonRect: NSRect, covering language: String?) {
+        // A rapid re-click replaces the previous label instead of stacking.
+        for view in subviews where view.identifier == Self.copiedFeedbackID {
+            view.removeFromSuperview()
+        }
         let label = NSTextField(labelWithString: "Copied")
+        label.identifier = Self.copiedFeedbackID
         label.font = .systemFont(ofSize: 10)
         label.textColor = .secondaryLabelColor
+        label.alignment = .center
         label.sizeToFit()
-        label.setFrameOrigin(NSPoint(
-            x: buttonRect.minX - label.frame.width - 6,
-            y: buttonRect.midY - label.frame.height / 2
-        ))
+
+        // The badge hugs the button's left edge minus an 8pt gap and uses the
+        // 10pt monospaced font (CodeBlockLayoutFragment.drawBadges) — span at
+        // least its width so it is fully hidden while the label shows.
+        let badgeFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        let badgeWidth = language.map { ceil(($0 as NSString).size(withAttributes: [.font: badgeFont]).width) } ?? 0
+        let width = max(label.frame.width, badgeWidth) + 10
+        let height = label.frame.height + 2
+        label.wantsLayer = true
+        label.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        label.layer?.cornerRadius = 3
+        label.frame = NSRect(
+            x: buttonRect.minX - 5 - width,
+            y: buttonRect.midY - height / 2,
+            width: width,
+            height: height
+        )
         addSubview(label)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             NSAnimationContext.runAnimationGroup { context in

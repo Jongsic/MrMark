@@ -80,6 +80,44 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertNotNil(attrs[.mrmarkCodeCopy])
     }
 
+    func testCodeBlockWithBlankFirstLineKeepsEdgeAndCopyMarkers() {
+        let rendered = renderer.render("```swift\n\nlet a = 1\n```\n\nafter")
+        // The blank first line is a lone newline character; the top edge,
+        // language, and copy marker must land on it instead of vanishing on a
+        // zero-length range (which silently drops the box top and the button).
+        let blankFirst = (rendered.string as NSString).range(of: "\nlet a = 1").location
+        let attrs = rendered.attributes(at: blankFirst, effectiveRange: nil)
+        XCTAssertEqual(attrs[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.top.rawValue)
+        XCTAssertNotNil(attrs[.mrmarkCodeCopy])
+        XCTAssertEqual(attrs[.mrmarkCodeLanguage] as? String, "swift")
+        XCTAssertEqual(
+            attributes(of: rendered, containing: "let a = 1")[.mrmarkCodeBlockEdge] as? Int,
+            CodeBlockEdge.bottom.rawValue
+        )
+    }
+
+    func testCodeBlockWithTrailingBlankLineKeepsBottomEdge() {
+        // One content line plus a trailing blank: the box is a single visual
+        // paragraph, so it carries both edges.
+        let single = renderer.render("```\nlet a = 1\n\n```")
+        XCTAssertEqual(
+            attributes(of: single, containing: "let a = 1")[.mrmarkCodeBlockEdge] as? Int,
+            CodeBlockEdge.both.rawValue
+        )
+
+        // Two content lines plus a trailing blank: the bottom edge anchors on
+        // the last paragraph that owns characters, not past the final newline.
+        let multi = renderer.render("```\nfirst\nsecond\n\n```")
+        XCTAssertEqual(
+            attributes(of: multi, containing: "first")[.mrmarkCodeBlockEdge] as? Int,
+            CodeBlockEdge.top.rawValue
+        )
+        XCTAssertEqual(
+            attributes(of: multi, containing: "second")[.mrmarkCodeBlockEdge] as? Int,
+            CodeBlockEdge.bottom.rawValue
+        )
+    }
+
     func testCopyDerivesCodeFromStorageRun() {
         let rendered = renderer.render("```\nfirst block\ncode line\n```\n\n```\nsecond block\n```\n\nafter")
         let string = rendered.string as NSString
