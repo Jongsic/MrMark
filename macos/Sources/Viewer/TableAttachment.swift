@@ -1,11 +1,14 @@
 import AppKit
 
-/// A GFM table rendered as its own horizontally scrollable region. The viewer's
-/// single text container wraps prose to the window, so a wide table can't scroll
-/// on its own there — it becomes a view attachment whose inner scroll view holds
-/// the grid. The table shows at its natural width and scrolls once the window is
-/// narrower than that. Selection and copy of the table happen inside the inner
-/// view; the outer find bar and selection treat the whole table as one object.
+/// A wide GFM table rendered as its own horizontally scrollable region. The
+/// viewer's single text container wraps prose to the window, so a wide table
+/// can't scroll on its own there — it becomes a view attachment whose inner
+/// scroll view holds the grid. The table shows at its natural width and scrolls
+/// once the window is narrower than that. Selection and copy of the table
+/// happen inside the inner view; the outer find bar and selection treat the
+/// whole table as one object — which is why only tables too wide for the
+/// default window use this (MarkdownRenderer.renderTable); narrower ones stay
+/// inline plain text.
 final class TableAttachment: NSTextAttachment {
     let grid: NSAttributedString
     let naturalWidth: CGFloat
@@ -91,9 +94,11 @@ private final class TableAttachmentViewProvider: NSTextAttachmentViewProvider {
         position: CGPoint
     ) -> CGRect {
         guard let table else { return .zero }
-        // Cap the visible width to the container; the inner text view stays at
-        // its natural width, so anything past the container edge scrolls.
-        let available = textContainer?.size.width ?? table.naturalWidth
+        // Cap the visible width to the container's usable line width — inside
+        // the line-fragment padding, or the right edge clips. The inner text
+        // view stays at its natural width, so anything past that edge scrolls.
+        let padding = 2 * (textContainer?.lineFragmentPadding ?? 0)
+        let available = (textContainer?.size.width ?? table.naturalWidth) - padding
         let width = min(table.naturalWidth, max(available, 0))
         return CGRect(x: 0, y: 0, width: width, height: table.gridHeight)
     }

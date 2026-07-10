@@ -41,6 +41,17 @@ final class FrontmatterTests: XCTestCase {
         XCTAssertNil(extractFrontmatter("intro\n---\nname: foo\n---\nbody"))
     }
 
+    func testMarkdownBetweenThematicBreaksIsNotFrontmatter() {
+        // A document opening with a horizontal rule and containing another one
+        // later must stay Markdown, not collapse into a verbatim blob.
+        XCTAssertNil(extractFrontmatter("---\n\n# Title\n\nSome prose between two rules.\n\n---\nmore text"))
+    }
+
+    func testLineOffsetCountsPeeledLines() throws {
+        let parsed = try XCTUnwrap(extractFrontmatter("---\nname: foo\ndesc: bar\n---\nbody"))
+        XCTAssertEqual(parsed.lineOffset, 4, "opening fence + two block lines + closing fence")
+    }
+
     func testNestedMapFallsBackToVerbatim() throws {
         let parsed = try XCTUnwrap(extractFrontmatter("---\nmeta:\n  nested: value\n---\nbody"))
         XCTAssertNil(parsed.properties, "a nested map isn't a flat key/value map")

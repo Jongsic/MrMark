@@ -65,7 +65,7 @@ final class MarkdownRendererTests: XCTestCase {
         let first = attributes(of: rendered, containing: "let a = 1")
         XCTAssertEqual(first[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.top.rawValue)
         XCTAssertEqual(first[.mrmarkCodeLanguage] as? String, "swift")
-        XCTAssertEqual(first[.mrmarkCodeCopy] as? String, "let a = 1\nlet b = 2")
+        XCTAssertNotNil(first[.mrmarkCodeCopy])
 
         let last = attributes(of: rendered, containing: "let b = 2")
         XCTAssertEqual(last[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.bottom.rawValue)
@@ -77,10 +77,26 @@ final class MarkdownRendererTests: XCTestCase {
         let rendered = renderer.render("```\nonly line\n```")
         let attrs = attributes(of: rendered, containing: "only line")
         XCTAssertEqual(attrs[.mrmarkCodeBlockEdge] as? Int, CodeBlockEdge.both.rawValue)
-        XCTAssertEqual(attrs[.mrmarkCodeCopy] as? String, "only line")
+        XCTAssertNotNil(attrs[.mrmarkCodeCopy])
     }
 
-    func testTableRendersAsScrollableGridAttachment() throws {
+    func testCopyDerivesCodeFromStorageRun() {
+        let rendered = renderer.render("```\nfirst block\ncode line\n```\n\n```\nsecond block\n```\n\nafter")
+        let string = rendered.string as NSString
+        XCTAssertEqual(
+            ViewerTextView.codeBlockText(in: rendered, at: string.range(of: "first").location),
+            "first block\ncode line"
+        )
+        // The newline joining the two blocks carries no code attribute, so the
+        // runs stay separate.
+        XCTAssertEqual(
+            ViewerTextView.codeBlockText(in: rendered, at: string.range(of: "second").location),
+            "second block"
+        )
+        XCTAssertNil(ViewerTextView.codeBlockText(in: rendered, at: string.range(of: "after").location))
+    }
+
+    func testNarrowTableStaysPlainFindableText() throws {
         let source = """
         | Name | Value |
         | ---- | ----- |
@@ -89,26 +105,52 @@ final class MarkdownRendererTests: XCTestCase {
         """
         let rendered = renderer.render(source)
 
-        // The whole table is a single scrollable view attachment; its grid text
-        // lives inside the attachment, not in the outer string.
-        let attachment = try XCTUnwrap(firstAttachment(in: rendered) as? TableAttachment)
-        let grid = attachment.grid
-        XCTAssertFalse(grid.string.contains("|"), "raw pipes must not leak into the grid")
-        XCTAssertTrue(grid.string.contains("Name\tValue"))
-        XCTAssertTrue(grid.string.contains("one\t1"))
-        XCTAssertTrue(grid.string.contains("한글\t둘"))
-        XCTAssertTrue(grid.string.contains("─"), "hairline rule under the header")
-        XCTAssertGreaterThan(attachment.naturalWidth, 0)
-        XCTAssertGreaterThan(attachment.gridHeight, 0)
+        // A table that fits the default window keeps its grid in the outer
+        // string, so the find bar and select-all copy still see it.
+        XCTAssertNil(firstAttachment(in: rendered))
+        XCTAssertFalse(rendered.string.contains("|"), "raw pipes must not leak into the grid")
+        XCTAssertTrue(rendered.string.contains("Name\tValue"))
+        XCTAssertTrue(rendered.string.contains("one\t1"))
+        XCTAssertTrue(rendered.string.contains("한글\t둘"))
+        XCTAssertTrue(rendered.string.contains("─"), "hairline rule under the header")
 
-        let nameRange = (grid.string as NSString).range(of: "Name")
-        let headerFont = grid.attributes(at: nameRange.location, effectiveRange: nil)[.font] as? NSFont
+        let headerFont = attributes(of: rendered, containing: "Name")[.font] as? NSFont
         XCTAssertTrue(headerFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
 
-        let oneRange = (grid.string as NSString).range(of: "one")
-        let rowStyle = grid.attributes(at: oneRange.location, effectiveRange: nil)[.paragraphStyle] as? NSParagraphStyle
+        let rowStyle = attributes(of: rendered, containing: "one")[.paragraphStyle] as? NSParagraphStyle
         XCTAssertEqual(try XCTUnwrap(rowStyle).tabStops.count, 2, "one tab stop per column")
         XCTAssertGreaterThan(try XCTUnwrap(rowStyle).tabStops[0].location, 0)
+    }
+
+    func testWideTableBecomesScrollableGridAttachment() throws {
+        let wide = String(repeating: "very wide cell content", count: 8)
+        let source = "| Name | Value |\n| ---- | ----- |\n| \(wide) | 1 |"
+        let rendered = renderer.render(source)
+
+        // Too wide for the window: the whole grid moves into one scrollable
+        // view attachment; its text lives inside the attachment.
+        let attachment = try XCTUnwrap(firstAttachment(in: rendered) as? TableAttachment)
+        XCTAssertFalse(rendered.string.contains("Name"))
+        let grid = attachment.grid
+        XCTAssertTrue(grid.string.contains("Name\tValue"))
+        XCTAssertTrue(grid.string.contains(wide))
+        XCTAssertTrue(grid.string.contains("─"), "hairline rule under the header")
+        XCTAssertGreaterThan(attachment.naturalWidth, 640)
+        XCTAssertGreaterThan(attachment.gridHeight, 0)
+
+        let headerFont = grid.attributes(
+            at: (grid.string as NSString).range(of: "Name").location,
+            effectiveRange: nil
+        )[.font] as? NSFont
+        XCTAssertTrue(headerFont?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+    }
+
+    func testCheckboxLinesAccountForFrontmatter() {
+        let rendered = renderer.render("---\ntitle: x\n---\n\n- [ ] first\n- [x] second")
+        // Lines are 1-based in the *original* document — toggling edits the
+        // original text, and the parser only ever saw the peeled body.
+        XCTAssertEqual(attributes(of: rendered, containing: "☐")[.mrmarkCheckboxLine] as? Int, 5)
+        XCTAssertEqual(attributes(of: rendered, containing: "☑")[.mrmarkCheckboxLine] as? Int, 6)
     }
 
     func testFrontmatterRendersAsPropertiesNotHeading() throws {

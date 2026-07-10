@@ -13,11 +13,16 @@ struct ParsedFrontmatter {
     let rawBlock: String
     /// The Markdown that follows the closing fence.
     let body: String
+    /// How many source lines were peeled off ahead of `body` (both fences plus
+    /// the block), so line numbers parsed from `body` can be mapped back to
+    /// lines in the original document (checkbox toggling edits the original).
+    let lineOffset: Int
 }
 
 /// Detects and peels a leading YAML frontmatter block. Returns `nil` (leaving
-/// the source untouched) unless it opens on the very first line with `---` and
-/// has a later `---` or `...` closing fence. Input is assumed newline-normalized
+/// the source untouched) unless it opens on the very first line with `---`,
+/// has a later `---` or `...` closing fence, and the lines between look like
+/// YAML. Input is assumed newline-normalized
 /// (`MarkdownDocument` normalizes CRLF to `\n` before rendering).
 func extractFrontmatter(_ source: String) -> ParsedFrontmatter? {
     guard source.hasPrefix("---") else { return nil }
@@ -32,12 +37,29 @@ func extractFrontmatter(_ source: String) -> ParsedFrontmatter? {
     guard let close = closeIndex else { return nil }
 
     let blockLines = Array(lines[1 ..< close])
+    // A document can open with a thematic break and contain another one later;
+    // claim the block as frontmatter only when every line plausibly is YAML.
+    // Otherwise all the Markdown in between would collapse into the verbatim
+    // fallback blob.
+    guard blockLinesLookLikeYAML(blockLines) else { return nil }
     let bodyLines = close + 1 < lines.count ? Array(lines[(close + 1)...]) : []
     return ParsedFrontmatter(
         properties: parseFlatProperties(blockLines),
         rawBlock: blockLines.joined(separator: "\n"),
-        body: bodyLines.joined(separator: "\n")
+        body: bodyLines.joined(separator: "\n"),
+        lineOffset: close + 1
     )
+}
+
+/// True when every non-empty line has a YAML-ish shape: an indented
+/// continuation, a `- ` sequence item, or a line with a `:`. Markdown prose or
+/// headings between two thematic breaks fail this and stay Markdown. (`#`
+/// comments are deliberately not counted — a Markdown heading looks the same.)
+private func blockLinesLookLikeYAML(_ lines: [String]) -> Bool {
+    lines.allSatisfy { line in
+        if line.isEmpty || line.first == " " || line.first == "\t" { return true }
+        return line.hasPrefix("- ") || line.contains(":")
+    }
 }
 
 /// Parses `key: value` lines plus the common `key:` + `- item` block-sequence

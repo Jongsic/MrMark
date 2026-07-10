@@ -12,8 +12,9 @@ extension NSAttributedString.Key {
     static let mrmarkCodeBlockEdge = NSAttributedString.Key("mrmark.codeBlockEdge")
     /// On a fenced code block's first line: the fence info string (language).
     static let mrmarkCodeLanguage = NSAttributedString.Key("mrmark.codeLanguage")
-    /// On a fenced code block's first line: the full code text the copy button
-    /// writes to the pasteboard.
+    /// On a fenced code block's first line: marks the copy button. The button
+    /// copies the enclosing `.mrmarkCodeBlock` run out of the text storage, so
+    /// the code text isn't stored a second time here.
     static let mrmarkCodeCopy = NSAttributedString.Key("mrmark.codeCopy")
 }
 
@@ -99,6 +100,12 @@ final class MarkdownRenderer {
     private static let maxNestingDepth = 80
     private var nestingDepth = 0
 
+    // When frontmatter is peeled off, the parser sees only the body, so parsed
+    // line numbers are short by the peeled lines. Checkbox toggling edits the
+    // *original* text by line (MarkdownDocument.toggleCheckbox), so the offset
+    // is added back wherever a source line is stored on the rendered output.
+    private var checkboxLineOffset = 0
+
     init(baseURL: URL? = nil, scale: CGFloat = 1) {
         self.baseURL = baseURL
         self.scale = scale
@@ -127,8 +134,10 @@ final class MarkdownRenderer {
         // properties block, then parse only the body — otherwise cmark renders
         // the fences as a thematic break plus a setext heading.
         var body = source
+        checkboxLineOffset = 0
         if let frontmatter = extractFrontmatter(source) {
             body = frontmatter.body
+            checkboxLineOffset = frontmatter.lineOffset
             if let block = renderFrontmatter(frontmatter) {
                 result.append(block)
                 first = false
@@ -286,15 +295,15 @@ final class MarkdownRenderer {
             }
 
             // The first line carries the rounded top edge, the language badge,
-            // and the text the copy button writes to the pasteboard; the last
-            // line carries the rounded bottom edge (drawn by the layout
-            // fragment). A single-line block is both edges at once.
+            // and the copy-button marker; the last line carries the rounded
+            // bottom edge (drawn by the layout fragment). A single-line block
+            // is both edges at once.
             block.addAttribute(
                 .mrmarkCodeBlockEdge,
                 value: (singleLine ? CodeBlockEdge.both : .top).rawValue,
                 range: firstRange
             )
-            block.addAttribute(.mrmarkCodeCopy, value: code, range: firstRange)
+            block.addAttribute(.mrmarkCodeCopy, value: true, range: firstRange)
             if let language = codeBlock.language, !language.isEmpty {
                 block.addAttribute(.mrmarkCodeLanguage, value: language, range: firstRange)
             }
@@ -370,7 +379,7 @@ final class MarkdownRenderer {
                 prefixAttributes[.foregroundColor] = NSColor.secondaryLabelColor
             }
             if item.checkbox != nil, let sourceLine = item.range?.lowerBound.line {
-                prefixAttributes[.mrmarkCheckboxLine] = sourceLine
+                prefixAttributes[.mrmarkCheckboxLine] = sourceLine + checkboxLineOffset
             }
 
             let line = NSMutableAttributedString(string: prefix, attributes: prefixAttributes)
@@ -409,7 +418,10 @@ final class MarkdownRenderer {
 
     /// Borderless aligned grid: bold header, hairline rule, columns sized to
     /// content via tab stops. Full table layout (borders, cell wrapping) is
-    /// out of scope by design; selection and copy stay plain text.
+    /// out of scope by design. A table that fits the default window stays
+    /// plain text — selection, copy, and the find bar all see it — while a
+    /// wider one becomes a horizontally scrollable attachment (its text then
+    /// lives inside the attachment's own view; see TableAttachment).
     private func renderTable(_ table: Markdown.Table) -> NSAttributedString {
         var headerAttributes = bodyAttributes
         headerAttributes[.font] = applying(.bold, to: bodyFont)
@@ -479,9 +491,15 @@ final class MarkdownRenderer {
             result.append(gridRow(cells))
         }
 
-        // The grid becomes a horizontally scrollable attachment so a wide table
-        // scrolls instead of clipping against the viewer's window-width wrap.
+        // A grid that fits the default window's text column stays inline plain
+        // text so Cmd-F and select-all copy keep seeing the table. Only a wider
+        // grid becomes a horizontally scrollable attachment (which trades those
+        // away) so it scrolls instead of clipping against the window-width
+        // wrap. Scale-relative so zooming doesn't change which tables scroll.
         let naturalWidth = location + 8 // trailing gap + inner text inset
+        if naturalWidth <= 640 * scale {
+            return result
+        }
         let measured = result.boundingRect(
             with: NSSize(width: 100_000, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
