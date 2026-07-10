@@ -265,13 +265,28 @@ final class MarkdownRenderer {
             let code = codeBlock.code.hasSuffix("\n") ? String(codeBlock.code.dropLast()) : codeBlock.code
             let block = NSMutableAttributedString(string: code, attributes: attributes)
 
+            // Line ranges for the edge attributes. Degenerate shapes need care:
+            // a blank first line would make the naive first range zero-length
+            // (attributes on an empty range are silently dropped — top edge,
+            // badge, and copy button vanish), and a trailing blank line would
+            // put the naive last range past the final newline. Clamp the first
+            // range to at least its newline character, and anchor the bottom
+            // edge on the last paragraph that owns any characters.
             let nsCode = code as NSString
             let firstLineEnd = nsCode.range(of: "\n").location
-            let singleLine = firstLineEnd == NSNotFound
-            let firstLineLength = singleLine ? block.length : firstLineEnd
-            let lastNewline = nsCode.range(of: "\n", options: .backwards)
-            let lastLineStart = lastNewline.location == NSNotFound ? 0 : lastNewline.location + 1
-            let firstRange = NSRange(location: 0, length: firstLineLength)
+            let firstRange = NSRange(
+                location: 0,
+                length: firstLineEnd == NSNotFound ? block.length : max(firstLineEnd, 1)
+            )
+            var lastLineStart = block.length
+            if block.length > 0 {
+                let beforeEnd = NSRange(location: 0, length: block.length - 1)
+                let lastNewline = nsCode.range(of: "\n", options: .backwards, range: beforeEnd)
+                lastLineStart = lastNewline.location == NSNotFound ? 0 : lastNewline.location + 1
+            }
+            // The last content paragraph collapsing into the first means the
+            // box is one visual line — both edges live on the first range.
+            let singleLine = lastLineStart <= 0
             let lastRange = NSRange(location: lastLineStart, length: block.length - lastLineStart)
 
             // The first line leaves room above for the box's top padding; the
