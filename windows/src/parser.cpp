@@ -82,6 +82,78 @@ int RunLength(const std::wstring& s, size_t pos, size_t end, wchar_t c)
     return n;
 }
 
+// MARK: - Link reference definitions
+
+// Collected per Parse() call (the app parses one document at a time). Only
+// the explicit `[text][label]` / `[text][]` forms resolve against these —
+// the shortcut `[label]` form is deliberately unsupported, so ordinary
+// bracketed prose ("[x]", "[TODO]") can never silently turn into a link.
+std::vector<std::pair<std::wstring, std::wstring>> g_linkDefinitions;
+
+std::wstring NormalizeLabel(const std::wstring& label)
+{
+    std::wstring out;
+    bool pendingSpace = false;
+    for (wchar_t c : Trim(label)) {
+        if (iswspace(c)) {
+            pendingSpace = true;
+            continue;
+        }
+        if (pendingSpace && !out.empty()) out += L' ';
+        pendingSpace = false;
+        out += (wchar_t)towlower(c);
+    }
+    return out;
+}
+
+const std::wstring* LookupLinkDefinition(const std::wstring& label)
+{
+    std::wstring key = NormalizeLabel(label);
+    if (key.empty()) return nullptr;
+    for (const auto& definition : g_linkDefinitions) {
+        if (definition.first == key) return &definition.second;
+    }
+    return nullptr;
+}
+
+// `[label]: destination` (optionally `<destination>`, optionally followed by
+// a quoted title) with <=3 spaces of indent. Anything else isn't claimed.
+bool TryParseLinkDefinition(const std::wstring& line, std::wstring& label, std::wstring& dest)
+{
+    int indent = LeadingSpaces(line);
+    if (indent > 3 || indent >= (int)line.size() || line[indent] != L'[') return false;
+    size_t close = std::wstring::npos;
+    for (size_t i = indent + 1; i < line.size(); i++) {
+        if (line[i] == L'\\') { i++; continue; }
+        if (line[i] == L'[') return false;
+        if (line[i] == L']') { close = i; break; }
+    }
+    if (close == std::wstring::npos || close + 1 >= line.size() || line[close + 1] != L':') {
+        return false;
+    }
+    label = line.substr(indent + 1, close - indent - 1);
+    if (NormalizeLabel(label).empty()) return false;
+
+    std::wstring rest = Trim(line.substr(close + 2));
+    if (rest.empty()) return false;
+    if (rest.front() == L'<') {
+        size_t end = rest.find(L'>');
+        if (end == std::wstring::npos) return false;
+        dest = rest.substr(1, end - 1);
+        rest = Trim(rest.substr(end + 1));
+    } else {
+        size_t end = rest.find_first_of(L" \t");
+        dest = end == std::wstring::npos ? rest : rest.substr(0, end);
+        rest = end == std::wstring::npos ? L"" : Trim(rest.substr(end));
+    }
+    if (dest.empty()) return false;
+    // Only an optional quoted/parenthesized title may follow.
+    if (!rest.empty() && rest.front() != L'"' && rest.front() != L'\'' && rest.front() != L'(') {
+        return false;
+    }
+    return true;
+}
+
 // MARK: - Fenced code
 
 struct Fence {
@@ -133,6 +205,55 @@ bool TryParseFence(const std::vector<Line>& lines, size_t& i, std::vector<Block>
     block.lang = space == std::wstring::npos ? fence.info : fence.info.substr(0, space);
     blocks.push_back(std::move(block));
     i = j;
+    return true;
+}
+
+// MARK: - Indented code
+
+// A tab or >=4 spaces of leading whitespace opens an indented code block —
+// checked last in ParseBlocks so nothing that previously rendered as a richer
+// block can silently turn into code, and a paragraph's own indented
+// continuation lines are lazily consumed by ParseParagraph first (as the
+// spec wants).
+bool IsIndentedCodeLine(const std::wstring& line)
+{
+    if (line.empty()) return false;
+    if (line[0] == L'\t') return true;
+    return LeadingSpaces(line) >= 4;
+}
+
+std::wstring StripCodeIndent(const std::wstring& line)
+{
+    if (!line.empty() && line[0] == L'\t') return line.substr(1);
+    return line.substr(std::min(4, LeadingSpaces(line)));
+}
+
+bool TryParseIndentedCode(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks)
+{
+    if (!IsIndentedCodeLine(lines[i].text)) return false;
+
+    // Interior blank lines stay inside the block; trailing blanks end it.
+    std::vector<std::wstring> body;
+    size_t consumed = i;
+    size_t blanks = 0;
+    for (size_t j = i; j < lines.size(); j++) {
+        if (IsBlank(lines[j].text)) { blanks++; continue; }
+        if (!IsIndentedCodeLine(lines[j].text)) break;
+        for (; blanks > 0; blanks--) body.push_back(L"");
+        body.push_back(StripCodeIndent(lines[j].text));
+        consumed = j + 1;
+    }
+
+    std::wstring content;
+    for (size_t k = 0; k < body.size(); k++) {
+        if (k > 0) content += L'\n';
+        content += body[k];
+    }
+    Block block;
+    block.type = BlockType::Code;
+    block.code = content;
+    blocks.push_back(std::move(block));
+    i = consumed;
     return true;
 }
 
@@ -522,12 +643,38 @@ bool StartsOtherBlock(const std::wstring& line)
         || QuoteContent(line, quote) || ListMarker(line, marker) || StartsHtmlBlock(line);
 }
 
+// Setext underline closing an open paragraph: a run of `=` (level 1) or `-`
+// (level 2), indent <= 3, trailing whitespace only. Returns 0 otherwise.
+// Checked before the thematic-break stop below, mirroring the spec's
+// precedence (cmark on macOS does the same): `Title\n---` is a heading, a
+// `---` after a blank line stays a rule.
+int SetextLevel(const std::wstring& line)
+{
+    int indent = LeadingSpaces(line);
+    if (indent > 3) return 0;
+    std::wstring span = TrimEnd(line.substr(indent));
+    if (span.empty()) return 0;
+    wchar_t marker = span[0];
+    if (marker != L'=' && marker != L'-') return 0;
+    for (wchar_t c : span) {
+        if (c != marker) return 0;
+    }
+    return marker == L'=' ? 1 : 2;
+}
+
 void ParseParagraph(const std::vector<Line>& lines, size_t& i, std::vector<Block>& blocks)
 {
     std::vector<std::wstring> collected;
-    while (i < lines.size() && !IsBlank(lines[i].text)
-           && (collected.empty()
-               || (!StartsOtherBlock(lines[i].text) && !StartsTable(lines, i)))) {
+    int setextLevel = 0;
+    while (i < lines.size() && !IsBlank(lines[i].text)) {
+        if (!collected.empty()) {
+            setextLevel = SetextLevel(lines[i].text);
+            if (setextLevel > 0) {
+                i++;
+                break;
+            }
+            if (StartsOtherBlock(lines[i].text) || StartsTable(lines, i)) break;
+        }
         collected.push_back(lines[i].text);
         i++;
     }
@@ -553,7 +700,12 @@ void ParseParagraph(const std::vector<Line>& lines, size_t& i, std::vector<Block
     }
 
     Block block;
-    block.type = BlockType::Paragraph;
+    if (setextLevel > 0) {
+        block.type = BlockType::Heading;
+        block.level = setextLevel;
+    } else {
+        block.type = BlockType::Paragraph;
+    }
     block.inlines = ParseInlines(joined);
     blocks.push_back(std::move(block));
 }
@@ -580,6 +732,7 @@ std::vector<Block> ParseBlocks(const std::vector<Line>& lines, int depth)
         if (TryParseList(lines, i, blocks, depth)) continue;
         if (TryParseTable(lines, i, blocks)) continue;
         if (TryParseHtmlBlock(lines, i, blocks)) continue;
+        if (TryParseIndentedCode(lines, i, blocks)) continue;
         ParseParagraph(lines, i, blocks);
     }
     return blocks;
@@ -678,7 +831,29 @@ bool TryParseLink(const std::wstring& text, size_t bracket, Inline& node, size_t
             if (bracketDepth == 0) { close = (int)i; break; }
         }
     }
-    if (close < 0 || close + 1 >= (int)text.size() || text[close + 1] != L'(') return false;
+    if (close < 0) return false;
+
+    // Reference form: `[text][label]` or collapsed `[text][]` (label = text).
+    if (close + 1 < (int)text.size() && text[close + 1] == L'[') {
+        size_t labelClose = std::wstring::npos;
+        for (size_t i = close + 2; i < text.size(); i++) {
+            if (text[i] == L'\\') { i++; continue; }
+            if (text[i] == L'[') break;
+            if (text[i] == L']') { labelClose = i; break; }
+        }
+        if (labelClose == std::wstring::npos) return false;
+        std::wstring label = text.substr(close + 2, labelClose - close - 2);
+        if (label.empty()) label = text.substr(bracket + 1, close - (int)bracket - 1);
+        const std::wstring* dest = LookupLinkDefinition(label);
+        if (!dest) return false; // unknown label: stays literal text
+        node.type = InlineType::Link;
+        node.dest = *dest;
+        node.children = ParseInlinesImpl(text.substr(bracket + 1, close - (int)bracket - 1), depth + 1);
+        end = labelClose + 1;
+        return true;
+    }
+
+    if (close + 1 >= (int)text.size() || text[close + 1] != L'(') return false;
 
     int parens = 0;
     int endParen = -1;
@@ -761,6 +936,80 @@ bool TryParseInlineHtml(const std::wstring& text, size_t pos, Inline& node, size
     node.text = text.substr(pos, close + 1 - pos);
     end = close + 1;
     return true;
+}
+
+// MARK: - HTML entities
+
+// UTF-16 targets need a surrogate pair past the BMP; 32-bit wchar_t doesn't.
+void AppendScalar(std::wstring& out, unsigned cp)
+{
+    if (cp > 0xFFFF && sizeof(wchar_t) == 2) {
+        cp -= 0x10000;
+        out += (wchar_t)(0xD800 + (cp >> 10));
+        out += (wchar_t)(0xDC00 + (cp & 0x3FF));
+    } else {
+        out += (wchar_t)cp;
+    }
+}
+
+// The named entities people actually type in Markdown. Anything outside this
+// set stays literal text — the safe failure mode; only recognized references
+// ever change what's shown. (cmark on macOS knows the full HTML5 table.)
+struct NamedEntity { const wchar_t* name; unsigned cp; };
+constexpr NamedEntity kNamedEntities[] = {
+    { L"amp", '&' }, { L"lt", '<' }, { L"gt", '>' }, { L"quot", '"' }, { L"apos", '\'' },
+    { L"nbsp", 0xA0 }, { L"copy", 0xA9 }, { L"reg", 0xAE }, { L"trade", 0x2122 },
+    { L"hellip", 0x2026 }, { L"mdash", 0x2014 }, { L"ndash", 0x2013 },
+    { L"lsquo", 0x2018 }, { L"rsquo", 0x2019 }, { L"ldquo", 0x201C }, { L"rdquo", 0x201D },
+    { L"laquo", 0xAB }, { L"raquo", 0xBB }, { L"bull", 0x2022 }, { L"middot", 0xB7 },
+    { L"sect", 0xA7 }, { L"para", 0xB6 }, { L"dagger", 0x2020 }, { L"Dagger", 0x2021 },
+    { L"deg", 0xB0 }, { L"plusmn", 0xB1 }, { L"times", 0xD7 }, { L"divide", 0xF7 },
+    { L"micro", 0xB5 }, { L"ne", 0x2260 }, { L"le", 0x2264 }, { L"ge", 0x2265 },
+    { L"asymp", 0x2248 }, { L"infin", 0x221E }, { L"larr", 0x2190 }, { L"uarr", 0x2191 },
+    { L"rarr", 0x2192 }, { L"darr", 0x2193 }, { L"harr", 0x2194 },
+    { L"frac12", 0xBD }, { L"frac14", 0xBC }, { L"frac34", 0xBE },
+    { L"sup2", 0xB2 }, { L"sup3", 0xB3 }, { L"euro", 0x20AC }, { L"pound", 0xA3 },
+    { L"yen", 0xA5 }, { L"cent", 0xA2 },
+};
+
+// `&name;`, `&#1234;`, or `&#xABCD;` at `pos`. Appends the decoded character
+// to `out` and returns true; invalid numeric references decode to U+FFFD per
+// spec, unknown names stay literal (returns false).
+bool TryParseEntity(const std::wstring& text, size_t pos, std::wstring& out, size_t& end)
+{
+    size_t semi = text.find(L';', pos + 1);
+    if (semi == std::wstring::npos || semi == pos + 1 || semi > pos + 32) return false;
+    std::wstring inner = text.substr(pos + 1, semi - pos - 1);
+
+    if (inner[0] == L'#') {
+        bool hex = inner.size() > 1 && (inner[1] == L'x' || inner[1] == L'X');
+        size_t digits = hex ? 2 : 1;
+        if (digits >= inner.size()) return false;
+        unsigned cp = 0;
+        for (size_t k = digits; k < inner.size(); k++) {
+            wchar_t c = inner[k];
+            unsigned digit;
+            if (IsAsciiDigit(c)) digit = c - L'0';
+            else if (hex && c >= L'a' && c <= L'f') digit = c - L'a' + 10;
+            else if (hex && c >= L'A' && c <= L'F') digit = c - L'A' + 10;
+            else return false;
+            cp = cp * (hex ? 16 : 10) + digit;
+            if (cp > 0x10FFFF) break;
+        }
+        if (cp == 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+        AppendScalar(out, cp);
+        end = semi + 1;
+        return true;
+    }
+
+    for (const auto& entity : kNamedEntities) {
+        if (inner == entity.name) {
+            AppendScalar(out, entity.cp);
+            end = semi + 1;
+            return true;
+        }
+    }
+    return false;
 }
 
 std::vector<Inline> ParseInlinesImpl(const std::wstring& text, int depth)
@@ -881,6 +1130,13 @@ std::vector<Inline> ParseInlinesImpl(const std::wstring& text, int depth)
                 continue;
             }
         }
+        if (c == L'&') {
+            size_t end;
+            if (TryParseEntity(text, pos, buffer, end)) {
+                pos = end;
+                continue;
+            }
+        }
 
         buffer += c;
         pos++;
@@ -939,7 +1195,40 @@ std::vector<Block> Parse(const std::wstring& source, int firstSourceLine)
     for (size_t i = 0; i < raw.size(); i++) {
         lines.push_back({ std::move(raw[i]), (int)i + firstSourceLine });
     }
-    return ParseBlocks(lines, 0);
+
+    // Link reference definitions: collect and hide them (fence-aware — a
+    // definition-shaped line inside a code block is code). Filtering keeps
+    // each surviving line's original source number, so checkbox lines stay
+    // correct.
+    g_linkDefinitions.clear();
+    std::vector<Line> kept;
+    kept.reserve(lines.size());
+    bool inFence = false;
+    Fence open{};
+    for (auto& line : lines) {
+        Fence fence;
+        if (inFence) {
+            if (FenceMarker(line.text, fence) && fence.marker == open.marker
+                && fence.length >= open.length && fence.info.empty()) {
+                inFence = false;
+            }
+            kept.push_back(std::move(line));
+            continue;
+        }
+        if (FenceMarker(line.text, fence)) {
+            inFence = true;
+            open = fence;
+            kept.push_back(std::move(line));
+            continue;
+        }
+        std::wstring label, dest;
+        if (TryParseLinkDefinition(line.text, label, dest)) {
+            g_linkDefinitions.emplace_back(NormalizeLabel(label), dest);
+            continue;
+        }
+        kept.push_back(std::move(line));
+    }
+    return ParseBlocks(kept, 0);
 }
 
 // MARK: - Frontmatter

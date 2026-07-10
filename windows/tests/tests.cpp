@@ -583,6 +583,101 @@ static void TestFrontmatter()
     }
 }
 
+// MARK: - Syntax parity with the macOS renderer (cmark-backed)
+
+static void TestSyntaxParity()
+{
+    // Setext headings.
+    {
+        auto b = md::Parse(L"Title\n=====");
+        CHECK(b.size() == 1 && b[0].type == md::BlockType::Heading && b[0].level == 1);
+        CHECK(md::PlainText(b[0].inlines) == L"Title");
+    }
+    {
+        auto b = md::Parse(L"Title\n---");
+        CHECK(b.size() == 1 && b[0].type == md::BlockType::Heading && b[0].level == 2);
+    }
+    {
+        auto b = md::Parse(L"Two\nlines\n---");
+        CHECK(b.size() == 1 && b[0].type == md::BlockType::Heading);
+    }
+    { // a rule after a blank line stays a rule; `*` never underlines
+        auto b = md::Parse(L"para\n\n---\n\npara");
+        CHECK(b.size() == 3 && b[1].type == md::BlockType::Rule);
+    }
+    {
+        auto b = md::Parse(L"Title\n***");
+        CHECK(b.size() == 2 && b[0].type == md::BlockType::Paragraph
+              && b[1].type == md::BlockType::Rule);
+    }
+    CHECK(md::Parse(L"---\ntext")[0].type == md::BlockType::Rule);
+    CHECK(md::Parse(L"=")[0].type == md::BlockType::Paragraph);
+
+    // Indented code blocks.
+    {
+        auto b = md::Parse(L"    code line\n    more");
+        CHECK(b.size() == 1 && b[0].type == md::BlockType::Code);
+        CHECK(b[0].code == L"code line\nmore" && b[0].lang.empty());
+    }
+    CHECK(md::Parse(L"    a\n\n    b")[0].code == L"a\n\nb");
+    CHECK(md::Parse(L"\ttabbed")[0].code == L"tabbed");
+    // Lazy continuation and list content keep their richer parses.
+    CHECK(md::Parse(L"para\n    lazy continuation").size() == 1);
+    CHECK(md::Parse(L"para\n    lazy continuation")[0].type == md::BlockType::Paragraph);
+    CHECK(md::Parse(L"- item\n    continued")[0].type == md::BlockType::List);
+
+    // HTML entities: numeric always, common names only; unknown stays
+    // literal (the safe failure mode), code spans stay raw.
+    CHECK(md::PlainText(md::Parse(L"a &amp; b &lt;c&gt;")[0].inlines) == L"a & b <c>");
+    CHECK(md::PlainText(md::Parse(L"&copy; &#65; &#x2764;")[0].inlines) == L"© A ❤");
+    CHECK(md::PlainText(md::Parse(L"&#x1F600;")[0].inlines) == L"\U0001F600");
+    CHECK(md::PlainText(md::Parse(L"&unknownentity; &nosemi and & alone")[0].inlines)
+          == L"&unknownentity; &nosemi and & alone");
+    CHECK(md::PlainText(md::Parse(L"\\&amp;")[0].inlines) == L"&amp;");
+    CHECK(md::Parse(L"`&amp;`")[0].inlines[0].text == L"&amp;");
+    CHECK(md::PlainText(md::Parse(L"&#0;")[0].inlines) == L"�");
+
+    // Reference links: explicit `[text][label]` / `[text][]` only — the
+    // shortcut form is deliberately unsupported so "[x]"-style prose can
+    // never silently become a link.
+    {
+        auto b = md::Parse(L"See [docs][api] now.\n\n[api]: https://example.com/x");
+        CHECK(b.size() == 1);
+        bool found = false;
+        for (const auto& n : b[0].inlines) {
+            if (n.type == md::InlineType::Link) {
+                found = true;
+                CHECK(n.dest == L"https://example.com/x");
+                CHECK(md::PlainText(n.children) == L"docs");
+            }
+        }
+        CHECK(found);
+    }
+    { // collapsed form, <bracketed> destination, case/whitespace-normalized label
+        auto b = md::Parse(L"[API Docs][] end\n\n[api docs]: <https://e.com/a b>");
+        CHECK(b[0].inlines[0].type == md::InlineType::Link);
+        CHECK(b[0].inlines[0].dest == L"https://e.com/a b");
+    }
+    {
+        auto b = md::Parse(L"![alt][img]\n\n[img]: pic.png");
+        CHECK(b[0].inlines[0].type == md::InlineType::Image);
+        CHECK(b[0].inlines[0].dest == L"pic.png");
+    }
+    CHECK(md::PlainText(md::Parse(L"[text][missing] stays")[0].inlines)
+          == L"[text][missing] stays");
+    CHECK(md::PlainText(md::Parse(L"[x] and [TODO] stay literal")[0].inlines)
+          == L"[x] and [TODO] stay literal");
+    { // definition shapes inside code fences are code, not definitions
+        auto b = md::Parse(L"```\n[not: a definition]\n```\n\n[not]: x");
+        CHECK(b[0].type == md::BlockType::Code && b[0].code == L"[not: a definition]");
+    }
+    { // hidden definition lines don't shift checkbox source lines
+        auto b = md::Parse(L"[api]: https://e.com\n\n- [ ] task");
+        CHECK(b.size() == 1 && b[0].type == md::BlockType::List);
+        CHECK(b[0].items[0].sourceLine == 3);
+    }
+}
+
 // The parser is a GFM subset, so we don't diff against the spec's HTML; this is
 // a stability suite — every CommonMark example (and the pathological nesting
 // cases appended by the generator) must parse without crashing or hanging.
@@ -610,6 +705,7 @@ int wmain()
     TestDocument();
     TestStyler();
     TestFrontmatter();
+    TestSyntaxParity();
     TestSpecCorpus();
     wprintf(L"%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
