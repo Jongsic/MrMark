@@ -56,7 +56,7 @@ using Microsoft::WRL::ComPtr;
 // MARK: - Command IDs
 
 enum {
-    IDM_NEW = 40001, IDM_OPEN, IDM_SAVE, IDM_SAVEAS, IDM_CLOSE,
+    IDM_NEW = 40001, IDM_OPEN, IDM_SAVE, IDM_SAVEAS, IDM_PRINT, IDM_CLOSE,
     IDM_UNDO, IDM_REDO, IDM_FIND, IDM_FINDNEXT, IDM_FINDPREV,
     IDM_TOGGLEMODE, IDM_ZOOMIN, IDM_ZOOMOUT, IDM_ZOOMRESET,
     IDM_BOLD, IDM_ITALIC, IDM_H1, IDM_H2, IDM_H3,
@@ -653,7 +653,7 @@ static ComPtr<ITextDocument> Tom()
     return g_app.tom;
 }
 
-static void InsertImages(const std::vector<std::wstring>& paths)
+static void InsertImages(HWND edit, const std::vector<std::wstring>& paths)
 {
     if (paths.empty()) return;
     ComPtr<IWICImagingFactory> wic;
@@ -665,10 +665,10 @@ static void InsertImages(const std::vector<std::wstring>& paths)
         FINDTEXTEXW find{};
         find.chrg = { 0, -1 };
         find.lpstrText = token;
-        if ((LONG)SendMessageW(g_app.richEdit, EM_FINDTEXTEXW, FR_DOWN, (LPARAM)&find) < 0) {
+        if ((LONG)SendMessageW(edit, EM_FINDTEXTEXW, FR_DOWN, (LPARAM)&find) < 0) {
             continue;
         }
-        SendMessageW(g_app.richEdit, EM_SETSEL, find.chrgText.cpMin, find.chrgText.cpMax);
+        SendMessageW(edit, EM_SETSEL, find.chrgText.cpMin, find.chrgText.cpMax);
 
         UINT w = 0, h = 0;
         if (wic) {
@@ -681,7 +681,7 @@ static void InsertImages(const std::vector<std::wstring>& paths)
             }
         }
         if (w == 0 || h == 0) {
-            SendMessageW(g_app.richEdit, EM_REPLACESEL, FALSE, (LPARAM)L"");
+            SendMessageW(edit, EM_REPLACESEL, FALSE, (LPARAM)L"");
             continue;
         }
         float drawW = std::min((float)w, 620.0f);
@@ -690,7 +690,7 @@ static void InsertImages(const std::vector<std::wstring>& paths)
         ComPtr<IStream> stream;
         if (FAILED(SHCreateStreamOnFileEx(paths[i].c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
                                           FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream))) {
-            SendMessageW(g_app.richEdit, EM_REPLACESEL, FALSE, (LPARAM)L"");
+            SendMessageW(edit, EM_REPLACESEL, FALSE, (LPARAM)L"");
             continue;
         }
         RICHEDIT_IMAGE_PARAMETERS params{};
@@ -700,20 +700,20 @@ static void InsertImages(const std::vector<std::wstring>& paths)
         params.Type = TA_BASELINE;
         params.pwszAlternateText = L"image";
         params.pIStream = stream.Get();
-        if (SendMessageW(g_app.richEdit, EM_INSERTIMAGE, 0, (LPARAM)&params) != S_OK) {
-            SendMessageW(g_app.richEdit, EM_REPLACESEL, FALSE, (LPARAM)L"");
+        if (SendMessageW(edit, EM_INSERTIMAGE, 0, (LPARAM)&params) != S_OK) {
+            SendMessageW(edit, EM_REPLACESEL, FALSE, (LPARAM)L"");
             continue;
         }
         // The exact line spacing every paragraph carries (macOS-matching
         // text pitch) would clip the image to one text line; let the
         // image's paragraph size itself naturally instead.
         CHARRANGE imageAt{ find.chrgText.cpMin, find.chrgText.cpMin + 1 };
-        SendMessageW(g_app.richEdit, EM_EXSETSEL, 0, (LPARAM)&imageAt);
+        SendMessageW(edit, EM_EXSETSEL, 0, (LPARAM)&imageAt);
         PARAFORMAT2 pf{};
         pf.cbSize = sizeof(pf);
         pf.dwMask = PFM_LINESPACING;
         pf.bLineSpacingRule = 0; // single: the line grows to fit its content
-        SendMessageW(g_app.richEdit, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+        SendMessageW(edit, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
     }
 }
 
@@ -780,7 +780,7 @@ static void StreamDocument(bool preserveScroll)
     EDITSTREAM stream{ (DWORD_PTR)&cookie, 0, StreamInProc };
     SendMessageW(g_app.richEdit, EM_STREAMIN, SF_RTF, (LPARAM)&stream);
 
-    InsertImages(builder.images);
+    InsertImages(g_app.richEdit, builder.images);
     IndexCheckboxes(builder.checkboxLines);
 
     SendMessageW(g_app.richEdit, EM_SETSEL, 0, 0);
@@ -1496,6 +1496,79 @@ static void CloseFind()
     InvalidateRect(g_app.hwnd, nullptr, TRUE);
 }
 
+// MARK: - Print (Ctrl+P)
+
+/// Prints the rendered Markdown — what the viewer shows — regardless of the
+/// current mode or theme. Theme colors are baked into the visible control's
+/// RTF (dark mode would print light-on-white), so the document is re-built
+/// with the light theme at 100% zoom into an off-screen RichEdit, then
+/// paginated onto the printer with EM_FORMATRANGE.
+static void PrintInteractive()
+{
+    PRINTDLGW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = g_app.hwnd;
+    dialog.Flags = PD_RETURNDC | PD_NOPAGENUMS | PD_NOSELECTION | PD_USEDEVMODECOPIESANDCOLLATE;
+    if (!PrintDlgW(&dialog)) return; // canceled, or no printer to talk to
+
+    HWND printEdit = CreateWindowExW(0, MSFTEDIT_CLASS, L"", WS_POPUP | ES_MULTILINE,
+                                     0, 0, 1, 1, g_app.hwnd, nullptr,
+                                     GetModuleHandleW(nullptr), nullptr);
+    if (!printEdit) {
+        DeleteDC(dialog.hDC);
+        if (dialog.hDevMode) GlobalFree(dialog.hDevMode);
+        if (dialog.hDevNames) GlobalFree(dialog.hDevNames);
+        return;
+    }
+
+    Theme light = LightTheme();
+    rtf::Builder builder;
+    builder.theme = &light;
+    builder.Build(md::Parse(g_app.doc.text));
+    std::pair<const char*, size_t> cookie{ builder.out.data(), builder.out.size() };
+    EDITSTREAM stream{ (DWORD_PTR)&cookie, 0, StreamInProc };
+    SendMessageW(printEdit, EM_STREAMIN, SF_RTF, (LPARAM)&stream);
+    InsertImages(printEdit, builder.images);
+
+    std::wstring name = g_app.doc.DisplayName();
+    DOCINFOW info{};
+    info.cbSize = sizeof(info);
+    info.lpszDocName = name.c_str();
+
+    HDC dc = dialog.hDC;
+    FORMATRANGE range{};
+    range.hdc = dc;
+    range.hdcTarget = dc;
+    // Page and render rects are in twips (1/1440 inch); ¾" margins all around.
+    range.rcPage = { 0, 0,
+                     MulDiv(GetDeviceCaps(dc, PHYSICALWIDTH), 1440, GetDeviceCaps(dc, LOGPIXELSX)),
+                     MulDiv(GetDeviceCaps(dc, PHYSICALHEIGHT), 1440, GetDeviceCaps(dc, LOGPIXELSY)) };
+    const LONG margin = 1440 * 3 / 4;
+    range.rc = { range.rcPage.left + margin, range.rcPage.top + margin,
+                 range.rcPage.right - margin, range.rcPage.bottom - margin };
+
+    GETTEXTLENGTHEX lenSpec{ GTL_NUMCHARS, 1200 };
+    LONG total = (LONG)SendMessageW(printEdit, EM_GETTEXTLENGTHEX, (WPARAM)&lenSpec, 0);
+    bool ok = StartDocW(dc, &info) > 0;
+    LONG printed = 0;
+    while (ok && printed < total) {
+        if (StartPage(dc) <= 0) { ok = false; break; }
+        range.chrg = { printed, -1 };
+        LONG next = (LONG)SendMessageW(printEdit, EM_FORMATRANGE, TRUE, (LPARAM)&range);
+        if (EndPage(dc) <= 0) { ok = false; break; }
+        if (next <= printed) break; // no forward progress; stop rather than spin
+        printed = next;
+    }
+    SendMessageW(printEdit, EM_FORMATRANGE, FALSE, 0); // release the format cache
+    if (ok) EndDoc(dc);
+    else AbortDoc(dc);
+
+    DestroyWindow(printEdit);
+    DeleteDC(dc);
+    if (dialog.hDevMode) GlobalFree(dialog.hDevMode);
+    if (dialog.hDevNames) GlobalFree(dialog.hDevNames);
+}
+
 // MARK: - Bars (chrome above the document)
 
 static const BarButton kEditorButtons[] = {
@@ -1736,6 +1809,8 @@ static HMENU BuildMenu()
     AppendMenuW(file, MF_STRING, IDM_SAVE, L"&Save\tCtrl+S");
     AppendMenuW(file, MF_STRING, IDM_SAVEAS, L"Save &As...\tCtrl+Shift+S");
     AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file, MF_STRING, IDM_PRINT, L"&Print...\tCtrl+P");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(file, MF_STRING, IDM_CLOSE, L"&Close\tCtrl+W");
 
     HMENU edit = CreatePopupMenu();
@@ -1845,6 +1920,7 @@ static void HandleCommand(int id)
     case IDM_OPEN: OpenInteractive(); break;
     case IDM_SAVE: SaveInteractive(); break;
     case IDM_SAVEAS: SaveAsInteractive(); break;
+    case IDM_PRINT: PrintInteractive(); break;
     case IDM_CLOSE: PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0); break;
     case IDM_UNDO: DoUndo(); break;
     case IDM_REDO: DoRedo(); break;
@@ -1904,6 +1980,7 @@ static LRESULT CALLBACK RichEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             case 'E': ToggleMode(); return 0;
             case 'N': SpawnWindow(L"--new"); return 0;
             case 'O': OpenInteractive(); return 0;
+            case 'P': PrintInteractive(); return 0;
             case 'W': PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0); return 0;
             case 'Z': DoUndo(); return 0;
             case 'Y': DoRedo(); return 0;
@@ -2152,6 +2229,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         if (ctrl && wp == 'F') { OpenFind(); return 0; }
         if (ctrl && wp == 'S') { SaveInteractive(); return 0; }
+        if (ctrl && wp == 'P') { PrintInteractive(); return 0; }
         if (ctrl && wp == 'E') { ToggleMode(); return 0; }
         if (ctrl && wp == 'W') { PostMessageW(hwnd, WM_CLOSE, 0, 0); return 0; }
         if (wp == VK_F3) { FindStep(shift ? -1 : +1, true); return 0; }
