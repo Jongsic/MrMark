@@ -36,6 +36,8 @@ targets:
     info:
       path: Resources/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleName: MrMark
         CFBundleDisplayName: MrMark
         NSPrincipalClass: NSApplication
